@@ -1,4 +1,3 @@
-## File: .github/workflows/apk_patcher.yml
 name: Patch and Sign APKs
 
 on:
@@ -62,9 +61,8 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
-      # --- NEW: Setup Node.js for apk-mitm ---
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -75,26 +73,21 @@ jobs:
           pip install -r requirements.txt
           npm install -g apk-mitm
 
-      # ── Download ──
+      # ── Download & Pre-Patch ──
+      # The pre-patch logic (like Schwartzblat for WhatsApp) is now inside run.py
       - name: Check for updates & download
         id: check_version
         run: python run.py --app ${{ matrix.app }} --step download
 
-# ── Tools (Dynamic Download) ──
+      # ── Tools (Dynamic Download) ──
       - name: Download Latest Apktool & UberSigner
         if: steps.check_version.outputs.update_needed == 'true'
         run: |
-          # Fetch latest Apktool
-          APKTOOL_URL=$(curl -s https://api.github.com/repos/iBotPeaches/Apktool/releases/latest \
-            | jq -r '.assets[] | select(.name | endswith(".jar")) | .browser_download_url')
-          echo "Downloading Apktool from $APKTOOL_URL"
+          APKTOOL_URL=$(curl -s https://api.github.com/repos/iBotPeaches/Apktool/releases/latest | jq -r '.assets[] | select(.name | endswith(".jar")) | .browser_download_url')
           wget -q "$APKTOOL_URL" -O apktool.jar
-
-          # Fetch latest Uber APK Signer
-          UBER_URL=$(curl -s https://api.github.com/repos/patrickfav/uber-apk-signer/releases/latest \
-            | jq -r '.assets[] | select(.name | endswith(".jar")) | .browser_download_url')
-          echo "Downloading UberSigner from $UBER_URL"
+          UBER_URL=$(curl -s https://api.github.com/repos/patrickfav/uber-apk-signer/releases/latest | jq -r '.assets[] | select(.name | endswith(".jar")) | .browser_download_url')
           wget -q "$UBER_URL" -O ubersigner.jar
+
       # ── Decode ──
       - name: Decode APK
         if: steps.check_version.outputs.update_needed == 'true'
@@ -139,7 +132,6 @@ jobs:
           update_status('apps/${{ matrix.app }}/status.json', success=True)
           "
 
-      # --- NEW: Explicitly update version file only on success ---
       - name: Update version file
         if: steps.check_version.outputs.update_needed == 'true' && success()
         run: echo "${{ steps.check_version.outputs.new_version }}" > apps/${{ matrix.app }}/version.txt
@@ -161,16 +153,17 @@ jobs:
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add apps/${{ matrix.app }}/version.txt apps/${{ matrix.app }}/status.json
           git commit -m "[${{ matrix.app }}] Update to ${{ steps.check_version.outputs.new_version || 'status update' }}" || echo "No changes to commit"
-          git pull origin main --rebase
-          git push origin main
+          
+          git pull origin main --rebase -X theirs
+          git push origin HEAD:main
 
       # ── Tag & Release ──
       - name: Create tag
         if: steps.check_version.outputs.update_needed == 'true' && success()
         run: |
-          git pull origin main --rebase
-          git tag ${{ matrix.app }}-v${{ steps.check_version.outputs.new_version }}
-          git push origin --tags
+          git pull origin main --rebase -X theirs
+          git tag -f ${{ matrix.app }}-v${{ steps.check_version.outputs.new_version }}
+          git push -f origin refs/tags/${{ matrix.app }}-v${{ steps.check_version.outputs.new_version }}
 
       - name: Create GitHub Release
         if: steps.check_version.outputs.update_needed == 'true' && success()
@@ -182,9 +175,10 @@ jobs:
           body: "Automated patch for ${{ matrix.app }} version ${{ steps.check_version.outputs.new_version }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  # 
+
+  # ──────────────────────────────────────────────
   # Job 3: Update apps.json listing
-  # 
+  # ──────────────────────────────────────────────
   update-listing:
     needs: build
     runs-on: ubuntu-latest
@@ -214,5 +208,6 @@ jobs:
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add apps.json
           git commit -m "update apps.json listing [skip ci]" || echo "No changes to commit"
-          git pull origin main --rebase
-          git push origin main
+          
+          git pull origin main --rebase -X theirs
+          git push origin HEAD:main

@@ -24,6 +24,7 @@ from core.utils import (
     update_version,
 )
 from core.downloader import download_app
+from core.pre_patcher import run_pre_patch
 from core.patcher import run_patch
 
 
@@ -74,6 +75,11 @@ def process_app(app_id: str, step: str = "all", no_mitm: bool = False) -> bool:
                 return False
 
         if step == "download":
+            # Run pre-patch even in download-only step to ensure the APK is prepared for subsequent manual steps if needed
+            pre_patch_success = run_pre_patch(app_id, output_filename)
+            if not pre_patch_success:
+                print(f"[-] [{app_id}] Pre-patching failed. Aborting.")
+                return False
             return True
 
     # --- Patch step ---
