@@ -1,0 +1,14 @@
+{
+  "id": "waze",
+  "name": "Waze",
+  "name_he": "ווייז",
+  "package_name": "com.waze",
+  "description": "Navigation app - patched version to block internal webviews.",
+  "description_he": "אפליקציית ניווט - גרסה ערוכה לחסימת דפדפנים פנימיים.",
+  "icon_url": "https://raw.githubusercontent.com/MetrolistGroup/Metrolist/main/fastlane/metadata/android/en-US/images/icon.png",
+  "source": "aptoide",
+  "maintainer": "cfopuser",
+  "skip_mitm": true,
+  "version_file": "apps/waze/version.txt",
+  "status_file": "apps/waze/status.json"
+}
