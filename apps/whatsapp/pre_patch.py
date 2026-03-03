@@ -8,22 +8,13 @@ PATCHER_REPO = os.getenv(
     "WHATSAPP_PATCHER_REPO",
     "https://github.com/Schwartzblat/WhatsAppPatcher.git",
 )
-PATCHER_REF = os.getenv("WHATSAPP_PATCHER_REF", "main")
+PATCHER_REF = os.getenv("WHATSAPP_PATCHER_REF", "master")
 PATCHER_DIR = "WhatsAppPatcher"
 
 
 def _clone_patcher(repo_dir: str):
-    # Ensure the directory is fully removed before cloning
     if os.path.exists(repo_dir):
-        try:
-            shutil.rmtree(repo_dir, ignore_errors=True)
-        except Exception:
-            # Fallback for Windows file locks
-            import subprocess
-            if os.name == 'nt':
-                subprocess.call(['rmdir', '/S', '/Q', repo_dir], shell=True)
-            else:
-                subprocess.call(['rm', '-rf', repo_dir])
+        shutil.rmtree(repo_dir)
 
     subprocess.check_call(
         [
