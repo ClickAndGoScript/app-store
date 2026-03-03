@@ -5,7 +5,7 @@
   "package_name": "com.waze",
   "description": "Navigation app - patched version to block internal webviews.",
   "description_he": "אפליקציית ניווט - גרסה ערוכה לחסימת דפדפנים פנימיים.",
-  "icon_url": "https://raw.githubusercontent.com/MetrolistGroup/Metrolist/main/fastlane/metadata/android/en-US/images/icon.png",
+  "icon_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcS5YJ6m8Z8x8FcuzvqTNqI0GT3UupyAaUtkRQ&s",
   "source": "aptoide",
   "maintainer": "cfopuser",
   "skip_mitm": true,
