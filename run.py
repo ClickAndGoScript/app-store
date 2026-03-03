@@ -26,6 +26,7 @@ from core.utils import (
 from core.downloader import download_app
 from core.pre_patcher import run_pre_patch
 from core.patcher import run_patch
+from core.binary_plugin import run_binary_patch
 
 
 def process_app(app_id: str, step: str = "all", no_mitm: bool = False) -> bool:
@@ -66,7 +67,11 @@ def process_app(app_id: str, step: str = "all", no_mitm: bool = False) -> bool:
         if not update_needed:
             print(f"[i] [{app_id}] No update needed. Done.")
             return True
-
+            
+        if not run_binary_patch(app_id, output_filename):
+            print(f"[-] [{app_id}] Binary patch failed. Aborting.")
+            return False    
+        
         if not no_mitm and not config.get("skip_mitm", False):
             # Run MITM and check success
             mitm_success = run_apk_mitm(output_filename)

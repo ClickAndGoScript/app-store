@@ -26,7 +26,13 @@ class GitHubSource:
             response.raise_for_status()
             data = response.json()
             
-            version = data.get("tag_name")
+            tag_name = data.get("tag_name")
+            
+            # Normalize version: remove 'v' prefix if present
+            if tag_name and tag_name.lower().startswith("v"):
+                version = tag_name[1:]
+            else:
+                version = tag_name
             title = data.get("name") or version
             
             # Find the first .apk asset
