@@ -2,21 +2,24 @@ import os
 import re
 
 def patch(decompiled_dir: str) -> bool:
-    print(f"[*] Starting WhatsApp Kosher patch (Precision Sniper Mode v18 - ZOMBIE SHELL)...")
+    print(f"[*] Starting WhatsApp Kosher patch (Final Solution: Shell Replacement)...")
     
-    # 1. חסימות תוכן (תמונות, ניוזלטר, טאבים)
+    # 1. חסימות תוכן רגילות
     photos = _patch_profile_photos(decompiled_dir)
     newsletter = _patch_newsletter_launcher(decompiled_dir)
     tabs = _patch_home_tabs(decompiled_dir)
     
-    # 2. חסימות ליבה (SPI, דפדפן)
+    # 2. חסימות ליבה
     spi = _patch_secure_pending_intent(decompiled_dir)
     browser = _patch_force_external_browser(decompiled_dir)
     
-    # 3. חסימת סטטוסים - שיטת ה"לובוטומיה" (מונע קריסה ב-Init)
+    # 3. טיפול בסטטוסים (מהשורש)
+    # שלב א': מחיקת הפעילות הבעייתית ויצירת קליפה ריקה (מונע את הקריסה ב-init)
     status_nuke = _patch_nuke_status_activity(decompiled_dir)
+    # שלב ב': הטיית קישורים שמצביעים לסטטוס (כדי למנוע מסך לבן/הבהוב)
+    status_redirect = _patch_redirect_status_intents(decompiled_dir)
 
-    results = [photos, newsletter, tabs, spi, browser, status_nuke]
+    results = [photos, newsletter, tabs, spi, browser, status_nuke, status_redirect]
     
     if all(results):
         print("\n[SUCCESS] All patches applied successfully!")
@@ -63,7 +66,7 @@ def _patch_profile_photos(root_dir):
         return False
 
 # ---------------------------------------------------------
-# 2. נטרול ניוזלטר (Newsletter Launcher)
+# 2. נטרול ניוזלטר
 # ---------------------------------------------------------
 def _patch_newsletter_launcher(root_dir):
     anchor = "NewsletterLinkLauncher/type not handled"
@@ -100,7 +103,7 @@ def _patch_newsletter_launcher(root_dir):
         return False
 
 # ---------------------------------------------------------
-# 3. הסרת טאב העדכונים (Home Tabs)
+# 3. הסרת טאב העדכונים
 # ---------------------------------------------------------
 def _patch_home_tabs(root_dir):
     anchor = "Tried to set badge for invalid tab id"
@@ -123,21 +126,19 @@ def _patch_home_tabs(root_dir):
             method_body = method_match.group(1)
             
             if "0x12c" in method_body and "0x258" in method_body and "AbstractCollection;->add" in method_body:
-                
                 updates_regex = r"(const/16\s+[vp]\d+,\s*0x12c.*?)((?:invoke-virtual|invoke-interface)\s*\{[vp]\d+,\s*[vp]\d+\},\s*Ljava/util/AbstractCollection;->add\(Ljava/lang/Object;\)Z)"
-                
                 if re.search(updates_regex, method_body, re.DOTALL):
                     new_method_body = re.sub(updates_regex, r"\1# \2", method_body, count=1, flags=re.DOTALL)
                     new_content = new_content.replace(method_body, new_method_body)
                     patch_applied = True
-                    print("    [+] Home Tabs: 'Updates' tab (0x12c) REMOVED from the target method.")
+                    print("    [+] Home Tabs: 'Updates' tab (0x12c) REMOVED.")
                     break
         
         if patch_applied:
             with open(target_file, 'w', encoding='utf-8') as f: f.write(new_content)
             return True
         else:
-            print("    [-] Home Tabs: Target method found, but regex failed to match 0x12c block.")
+            print("    [-] Home Tabs: Target method found, but regex failed.")
             return False
 
     except Exception as e:
@@ -158,7 +159,6 @@ def _patch_secure_pending_intent(root_dir):
 
     try:
         with open(target_file, 'r', encoding='utf-8') as f: content = f.read()
-        
         pattern = re.compile(r"(if-nez [vp]\d+, (:cond_\w+))(\s*(?:\.line \d+\s*)*)(const-string [vp]\d+, \"Please set reporter)")
         new_content, num_subs = pattern.subn(r"goto \2\3\4", content)
         
@@ -175,7 +175,7 @@ def _patch_secure_pending_intent(root_dir):
         return False
 
 # ---------------------------------------------------------
-# 5. חסימת דפדפן פנימי (Hijack onCreate)
+# 5. חסימת דפדפן פנימי
 # ---------------------------------------------------------
 def _patch_force_external_browser(root_dir):
     target_filename = "WaInAppBrowsingActivity.smali"
@@ -248,49 +248,49 @@ def _patch_force_external_browser(root_dir):
         return False
 
 # ---------------------------------------------------------
-# 6. הריגת נגן הסטטוסים (Shell Replacement / Lobotomy)
+# 6. הריגת נגן הסטטוסים (Shell Replacement)
 # ---------------------------------------------------------
 def _patch_nuke_status_activity(root_dir):
     """
-    מחליף את כל התוכן של StatusPlaybackActivity בקליפה ריקה (Shell).
-    זה מונע קריסות ב-Constructor (<init>) שנובעות מקוד מקורי פגום/מבולגן,
-    ומבטיח שהפעילות פשוט תיפתח ותיסגר מיד.
+    מחליף את קובץ ה-Activity המקורי בקובץ חדש ונקי לחלוטין.
+    זה פותר את בעיית ה-NoSuchMethodError בקונסטרקטור.
     """
     target_filename = "StatusPlaybackActivity.smali"
     print(f"\n[6] Nuking Status Playback Activity ({target_filename})...")
 
     target_file = _find_file_recursive(root_dir, target_filename)
     if not target_file:
-        print("    [-] StatusPlaybackActivity.smali not found. Skipping.")
+        print("    [-] StatusPlaybackActivity.smali not found.")
         return False
 
     try:
-        # קריאת הקובץ רק כדי לגלות מי האבא (Parent Class)
-        with open(target_file, 'r', encoding='utf-8') as f: content = f.read()
+        # אנו קוראים את הקובץ רק כדי לחלץ את שם מחלקת האב (המשתנה מגרסה לגרסה)
+        with open(target_file, 'r', encoding='utf-8') as f:
+            content = f.read()
 
-        super_class_match = re.search(r"^\.super\s+(L[^;]+;)", content, re.MULTILINE)
-        if not super_class_match:
-            print("    [-] Could not determine parent class.")
+        # Regex לחילוץ שם האב: .super LX/0M6;
+        super_match = re.search(r"^\.super\s+(L[^;]+;)", content, re.MULTILINE)
+        if not super_match:
+            print("    [-] Could not determine parent class from source.")
             return False
         
-        parent_class = super_class_match.group(1)
+        parent_class = super_match.group(1)
         print(f"    [i] Detected parent class: {parent_class}")
 
-        # יצירת הקובץ החדש - נקי לחלוטין
-        # אין שדות, אין שיטות מסובכות, רק בנאי פשוט ו-onCreate שסוגר.
+        # תוכן הקובץ החדש: קצר, נקי, ללא אתחול שדות מורכב
         new_content = f"""
-.class public Lcom/whatsapp/status/playback/StatusPlaybackActivity;
+.class public final Lcom/whatsapp/status/playback/StatusPlaybackActivity;
 .super {parent_class}
 .source "StatusPlaybackActivity.java"
 
-# בנאי מינימלי למניעת קריסה ב-Init
+# בנאי פשוט שקורא רק לאבא ויוצא. בלי LX/7z0 ובלי צרות.
 .method public constructor <init>()V
     .locals 0
     invoke-direct {{p0}}, {parent_class}-><init>()V
     return-void
 .end method
 
-# onCreate מינימלי לסגירה מידית
+# onCreate שפשוט סוגר את המסך.
 .method public onCreate(Landroid/os/Bundle;)V
     .locals 0
     invoke-super {{p0, p1}}, {parent_class}->onCreate(Landroid/os/Bundle;)V
@@ -298,16 +298,58 @@ def _patch_nuke_status_activity(root_dir):
     return-void
 .end method
 """
-        # דריסת הקובץ הישן
+        # כתיבת הקובץ מחדש
         with open(target_file, 'w', encoding='utf-8') as f:
             f.write(new_content)
             
-        print(f"    [+] StatusPlaybackActivity replaced with empty shell.")
+        print(f"    [+] StatusPlaybackActivity replaced with zombie shell.")
         return True
 
     except Exception as e:
         print(f"    [-] Error nuking status activity: {e}")
         return False
+
+# ---------------------------------------------------------
+# 7. הטיית הפניות לסטטוס (Redirection)
+# ---------------------------------------------------------
+def _patch_redirect_status_intents(root_dir):
+    """
+    מחפש בכל הקוד מקומות שמנסים לפתוח את StatusPlaybackActivity
+    ומשנה אותם כך שיפתחו את HomeActivity (רענון מסך הבית).
+    """
+    target_status_class = "Lcom/whatsapp/status/playback/StatusPlaybackActivity;"
+    redirect_class = "Lcom/whatsapp/HomeActivity;" 
+    alt_redirect_class = "Lcom/whatsapp/Main;"
+
+    print(f"\n[7] Redirecting Status Intents...")
+    
+    # בדיקה מהירה לאן להפנות
+    home_exists = _find_file_recursive(root_dir, "HomeActivity.smali")
+    main_exists = _find_file_recursive(root_dir, "Main.smali")
+    final_redirect = redirect_class if home_exists else (alt_redirect_class if main_exists else None)
+    
+    if not final_redirect:
+        print("    [-] Redirect target not found. Skipping redirection.")
+        return True 
+
+    print(f"    [i] Redirecting to: {final_redirect}")
+    
+    patched_count = 0
+    for root, dirs, files in os.walk(root_dir):
+        for file in files:
+            if file.endswith(".smali") and file != "StatusPlaybackActivity.smali":
+                path = os.path.join(root, file)
+                try:
+                    with open(path, 'r', encoding='utf-8') as f: content = f.read()
+                    
+                    if target_status_class in content:
+                        new_content = content.replace(target_status_class, final_redirect)
+                        with open(path, 'w', encoding='utf-8') as f: f.write(new_content)
+                        patched_count += 1
+                except: continue
+
+    print(f"    [+] Redirected {patched_count} references.")
+    return True
 
 # ---------------------------------------------------------
 # פונקציות עזר
