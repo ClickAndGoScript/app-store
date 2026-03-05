@@ -2,19 +2,25 @@ import os
 import re
 
 def patch(decompiled_dir: str) -> bool:
-    print(f"[*] Starting WhatsApp Kosher patch (Precision Sniper Mode v16 - METHOD ISOLATION)...")
+    print(f"[*] Starting WhatsApp Kosher patch (Double-Barrel Mode: Block & Kill)...")
     
-    # ביצוע הפאצ'ים
+    # 1. חסימות תוכן (תמונות, ניוזלטר, טאבים)
     photos = _patch_profile_photos(decompiled_dir)
     newsletter = _patch_newsletter_launcher(decompiled_dir)
     tabs = _patch_home_tabs(decompiled_dir)
+    
+    # 2. חסימות ליבה (SPI, דפדפן)
     spi = _patch_secure_pending_intent(decompiled_dir)
     browser = _patch_force_external_browser(decompiled_dir)
+    
+    # 3. מערכת כפולה לחסימת סטטוסים (גישה + יעד)
+    status_kill = _patch_kill_status_playback(decompiled_dir)      # שכבה 1: הרג היעד
+    status_redirect = _patch_redirect_status_intents(decompiled_dir) # שכבה 2: חסימת הגישה
 
-    results = [photos, newsletter, tabs, spi, browser]
+    results = [photos, newsletter, tabs, spi, browser, status_kill, status_redirect]
     
     if all(results):
-        print("\n[SUCCESS] All patches and clone were applied successfully!")
+        print("\n[SUCCESS] All patches applied successfully!")
         return True
     else:
         print("\n[FAILURE] One or more critical patches failed. Check logs.")
@@ -95,7 +101,7 @@ def _patch_newsletter_launcher(root_dir):
         return False
 
 # ---------------------------------------------------------
-# 3. הסרת טאב העדכונים (Home Tabs) - METHOD ISOLATION
+# 3. הסרת טאב העדכונים (Home Tabs)
 # ---------------------------------------------------------
 def _patch_home_tabs(root_dir):
     anchor = "Tried to set badge for invalid tab id"
@@ -109,33 +115,24 @@ def _patch_home_tabs(root_dir):
     try:
         with open(target_file, 'r', encoding='utf-8') as f: content = f.read()
         
-        # מחלקים את הקובץ לבלוקים של מתודות, כדי למנוע זליגה של ה-Regex ממתודה למתודה
         method_pattern = re.compile(r'(\.method.*?\.end method)', re.DOTALL)
         
         new_content = content
         patch_applied = False
         
-        # סורקים כל מתודה בנפרד
         for method_match in method_pattern.finditer(content):
             method_body = method_match.group(1)
             
-            # מחפשים את המתודה הספציפית שבתוכה מתבצעת בניית הרשימה
-            # היא חייבת להכיל גם 0x12c, גם 0x258, וגם הוספה ל-Collection
             if "0x12c" in method_body and "0x258" in method_body and "AbstractCollection;->add" in method_body:
                 
-                # עכשיו אנחנו בטוחים ב-100% שאנחנו בתוך מתודה A05
-                # נחפש את ה-12c, ואת ה-add הראשון שבא אחריו. 
                 updates_regex = r"(const/16\s+[vp]\d+,\s*0x12c.*?)((?:invoke-virtual|invoke-interface)\s*\{[vp]\d+,\s*[vp]\d+\},\s*Ljava/util/AbstractCollection;->add\(Ljava/lang/Object;\)Z)"
                 
                 if re.search(updates_regex, method_body, re.DOTALL):
-                    # מחליפים בהערה
                     new_method_body = re.sub(updates_regex, r"\1# \2", method_body, count=1, flags=re.DOTALL)
-                    
-                    # מעדכנים את הקובץ המלא עם המתודה הערוכה
                     new_content = new_content.replace(method_body, new_method_body)
                     patch_applied = True
                     print("    [+] Home Tabs: 'Updates' tab (0x12c) REMOVED from the target method.")
-                    break # מצאנו וטיפלנו, אפשר לעצור את הלולאה
+                    break
         
         if patch_applied:
             with open(target_file, 'w', encoding='utf-8') as f: f.write(new_content)
@@ -149,7 +146,7 @@ def _patch_home_tabs(root_dir):
         return False
 
 # ---------------------------------------------------------
-# 4. תיקון SecurePendingIntent (Strict Regex Logic)
+# 4. תיקון SecurePendingIntent
 # ---------------------------------------------------------
 def _patch_secure_pending_intent(root_dir):
     anchor = "Please set reporter for SecurePendingIntent library"
@@ -163,10 +160,7 @@ def _patch_secure_pending_intent(root_dir):
     try:
         with open(target_file, 'r', encoding='utf-8') as f: content = f.read()
         
-        # Regex שמחפש if-nez שדבוק לשגיאה (מופרד רק ע"י שורות line ורווחים)
         pattern = re.compile(r"(if-nez [vp]\d+, (:cond_\w+))(\s*(?:\.line \d+\s*)*)(const-string [vp]\d+, \"Please set reporter)")
-
-        # החלפה ישירה ל-goto. אם יש return באמצע - ה-Regex פשוט יתעלם מזה.
         new_content, num_subs = pattern.subn(r"goto \2\3\4", content)
         
         if num_subs > 0:
@@ -175,25 +169,20 @@ def _patch_secure_pending_intent(root_dir):
             return True
         else:
             print("    [-] Check not found or already bypassed.")
-            return True # אנחנו מחזירים True כדי לא לעצור את הקימפול במקרה של שינוי באפליקציה
+            return True
 
     except Exception as e:
         print(f"    [-] Error: {e}")
         return False
+
 # ---------------------------------------------------------
-# 5. חסימת דפדפן פנימי (Hijack onCreate) - גרסה מתוקנת v2
+# 5. חסימת דפדפן פנימי (Hijack onCreate)
 # ---------------------------------------------------------
 def _patch_force_external_browser(root_dir):
     target_filename = "WaInAppBrowsingActivity.smali"
     print(f"\n[5] Hijacking Internal Browser ({target_filename})...")
     
-    target_file = None
-    # חיפוש הקובץ
-    for root, dirs, files in os.walk(root_dir):
-        if target_filename in files:
-            target_file = os.path.join(root, target_filename)
-            break
-            
+    target_file = _find_file_recursive(root_dir, target_filename)
     if not target_file:
         print("    [-] WaInAppBrowsingActivity.smali not found. Skipping.")
         return False
@@ -202,18 +191,11 @@ def _patch_force_external_browser(root_dir):
         with open(target_file, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        # 1. זיהוי דינמי של מחלקת האב (Parent Class) מתוך כותרת הקובץ
-        # אנו מחפשים את השורה: .super L...;
         super_class_match = re.search(r"^\.super\s+(L[^;]+;)", content, re.MULTILINE)
-        
         if not super_class_match:
-            print("    [-] Could not determine parent class from .super declaration.")
             return False
-            
         parent_class = super_class_match.group(1)
-        print(f"    [i] Detected parent class: {parent_class}")
 
-        # 2. מציאת המתודה onCreate המקורית כדי להחליף אותה
         method_pattern = re.compile(
             r"(\.method public onCreate\(Landroid\/os\/Bundle;\)V)(.*?)(\.end method)",
             re.DOTALL
@@ -221,77 +203,145 @@ def _patch_force_external_browser(root_dir):
         
         match = method_pattern.search(content)
         if not match:
-            print("    [-] onCreate method not found.")
             return False
 
         original_body = match.group(2)
-
-        # 3. הכנת הקוד החדש
-        # אנו בונים את שורת ה-invoke-super בצורה מלאכותית ונכונה בהתבסס על ה-parent_class שמצאנו למעלה.
-        # זה פותר את הבעיה של NoSuchMethodError.
         new_body = f"""
     .locals 4
-
-    # 1. Call Super (Generated correctly based on .super declaration)
     invoke-super {{p0, p1}}, {parent_class}->onCreate(Landroid/os/Bundle;)V
-
-    # 2. Get URL from Intent
     invoke-virtual {{p0}}, Landroid/app/Activity;->getIntent()Landroid/content/Intent;
     move-result-object v0
     const-string v1, "webview_url"
     invoke-virtual {{v0, v1}}, Landroid/content/Intent;->getStringExtra(Ljava/lang/String;)Ljava/lang/String;
     move-result-object v2
-
-    # Check if URL exists
     if-nez v2, :cond_start_browser
     invoke-virtual {{p0}}, Landroid/app/Activity;->finish()V
     return-void
-
     :cond_start_browser
-    # 3. Prepare External Intent
     invoke-static {{v2}}, Landroid/net/Uri;->parse(Ljava/lang/String;)Landroid/net/Uri;
     move-result-object v0
     new-instance v1, Landroid/content/Intent;
     const-string v3, "android.intent.action.VIEW"
     invoke-direct {{v1, v3, v0}}, Landroid/content/Intent;-><init>(Ljava/lang/String;Landroid/net/Uri;)V
-    
-    # 4. Try Start Activity
     :try_start_0
     invoke-virtual {{p0, v1}}, Landroid/app/Activity;->startActivity(Landroid/content/Intent;)V
     :try_end_0
     .catch Ljava/lang/Exception; {{:try_start_0 .. :try_end_0}} :catch_0
-
     goto :goto_finish
-
     :catch_0
-    # 5. Error (No Browser) -> Toast
     move-exception v0
     const/4 v0, 0x1 
-    # "לא נמצא דפדפן / No Browser Found" in Unicode
     const-string v1, "\\u05dc\\u05d0 \\u05e0\\u05de\\u05e6\\u05d0 \\u05d3\\u05e4\\u05d3\\u05e4\\u05df / No Browser Found" 
-    
     invoke-static {{p0, v1, v0}}, Landroid/widget/Toast;->makeText(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;
     move-result-object v0
     invoke-virtual {{v0}}, Landroid/widget/Toast;->show()V
-
     :goto_finish
-    # 6. Kill Internal Activity
     invoke-virtual {{p0}}, Landroid/app/Activity;->finish()V
     return-void
 """
-
-        # 4. ביצוע ההחלפה
         new_content = content.replace(original_body, new_body)
-        
         with open(target_file, 'w', encoding='utf-8') as f:
             f.write(new_content)
-            
-        print(f"    [+] Browser hijacked successfully! (Parent: {parent_class})")
+        print(f"    [+] Browser hijacked successfully!")
         return True
-
     except Exception as e:
         print(f"    [-] Error patching browser: {e}")
         return False
+
+# ---------------------------------------------------------
+# 6. הריגת נגן הסטטוסים (Layer 1: Destination Kill)
+# ---------------------------------------------------------
+def _patch_kill_status_playback(root_dir):
+    target_filename = "StatusPlaybackActivity.smali"
+    print(f"\n[6] Neutralizing Status Playback Activity ({target_filename})...")
+
+    target_file = _find_file_recursive(root_dir, target_filename)
+    if not target_file:
+        print("    [-] StatusPlaybackActivity.smali not found. Skipping layer 1.")
+        return False
+
+    try:
+        with open(target_file, 'r', encoding='utf-8') as f: content = f.read()
+
+        super_class_match = re.search(r"^\.super\s+(L[^;]+;)", content, re.MULTILINE)
+        if not super_class_match: return False
+        parent_class = super_class_match.group(1)
+
+        method_pattern = re.compile(r"(\.method.*?onCreate\(Landroid\/os\/Bundle;\)V)(.*?)(\.end method)", re.DOTALL)
+
+        if not method_pattern.search(content): return False
+
+        # קוד "התאבדות": קריאה ל-super ואז finish מידי
+        new_body = f"""
+    .locals 0
+    invoke-super {{p0, p1}}, {parent_class}->onCreate(Landroid/os/Bundle;)V
+    invoke-virtual {{p0}}, Landroid/app/Activity;->finish()V
+    return-void
+"""
+        new_content = method_pattern.sub(r"\1" + new_body + r"\3", content)
+
+        with open(target_file, 'w', encoding='utf-8') as f: f.write(new_content)
+        print(f"    [+] StatusPlaybackActivity neutralized.")
+        return True
+
+    except Exception as e:
+        print(f"    [-] Error neutralizing status playback: {e}")
+        return False
+
+# ---------------------------------------------------------
+# 7. הטיית הפניות לסטטוס (Layer 2: Access Block)
+# ---------------------------------------------------------
+def _patch_redirect_status_intents(root_dir):
+    """
+    סורק את כל הקבצים ומחפש הפניות (Intents) ל-StatusPlaybackActivity.
+    משנה את היעד ל-HomeActivity.
+    התוצאה: לחיצה על סטטוס פשוט מרעננת את מסך הבית במקום לפתוח את הנגן.
+    """
+    target_status_class = "Lcom/whatsapp/status/playback/StatusPlaybackActivity;"
+    redirect_class = "Lcom/whatsapp/HomeActivity;" # דף הבית
+    
+    # גיבוי: בגרסאות מסוימות דף הבית הוא Main
+    alt_redirect_class = "Lcom/whatsapp/Main;"
+
+    print(f"\n[7] Redirecting Status Intents (Sniper Mode)...")
+    
+    # בדיקה מקדימה איזה מחלקה קיימת כדי לא לגרום לקריסה
+    home_exists = _find_file_recursive(root_dir, "HomeActivity.smali")
+    main_exists = _find_file_recursive(root_dir, "Main.smali")
+    
+    final_redirect = redirect_class if home_exists else (alt_redirect_class if main_exists else None)
+    
+    if not final_redirect:
+        print("    [-] Neither HomeActivity nor Main found. Skipping redirect layer to prevent crashes.")
+        return True # לא מכשיל את הבנייה, מסתמך על שכבה 1
+
+    print(f"    [i] Redirect target identified: {final_redirect}")
+    
+    patched_count = 0
+    
+    for root, dirs, files in os.walk(root_dir):
+        for file in files:
+            if file.endswith(".smali") and file != "StatusPlaybackActivity.smali":
+                path = os.path.join(root, file)
+                try:
+                    with open(path, 'r', encoding='utf-8') as f: content = f.read()
+                    
+                    # חיפוש: const-class v0, L.../StatusPlaybackActivity;
+                    # החלפה: const-class v0, L.../HomeActivity;
+                    if target_status_class in content:
+                        new_content = content.replace(target_status_class, final_redirect)
+                        with open(path, 'w', encoding='utf-8') as f: f.write(new_content)
+                        patched_count += 1
+                except:
+                    continue
+
+    if patched_count > 0:
+        print(f"    [+] Successfully redirected {patched_count} access points to Home Screen.")
+    else:
+        print("    [-] No external references to StatusPlaybackActivity found (might be obfuscated).")
+    
+    return True
+
 # ---------------------------------------------------------
 # פונקציות עזר
 # ---------------------------------------------------------
@@ -306,4 +356,10 @@ def _find_file_by_string(root_dir, search_string):
                             return path
                 except:
                     continue
+    return None
+
+def _find_file_recursive(root_dir, filename):
+    for root, dirs, files in os.walk(root_dir):
+        if filename in files:
+            return os.path.join(root, filename)
     return None
