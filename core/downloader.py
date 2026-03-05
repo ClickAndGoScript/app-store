@@ -156,9 +156,14 @@ def download_app(app_config: dict, output_filename: str = "latest.apk") -> tuple
     if not remote_version:
         raise DownloadError(f"[{app_name}] No results found on {source_name}.")
 
+    # הוספת תמיכה בסיומת גרסה לתיקוני באגים (Hotfix)
+    suffix = app_config.get("version_name_suffix", "")
+    if suffix:
+        remote_version = f"{remote_version}{suffix}"
+        title = f"{title} (Hotfix {suffix})"
+
     print(f"[*] [{app_name}] Latest release: {title}")
     print(f"[*] [{app_name}] Remote version: {remote_version}")
-
     # 4. Compare versions.
     if remote_version == local_version:
         print(f"[i] [{app_name}] Versions match. No update needed.")
