@@ -110,6 +110,9 @@
     invoke-virtual {v10, v1}, Landroid/os/Handler;->post(Ljava/lang/Runnable;)Z
 
     :cond_exit
+    :try_end_0
+    .catch Ljava/lang/Exception; {:try_start_0 .. :try_end_0} :catch_error
+
     :goto_exit
     return-void
 
