@@ -11,30 +11,31 @@ from core.universal_updater import inject_universal_updater
 from core.utils import load_app_config
 
 
-def apply_version_suffix(decompiled_dir: str, suffix: str):
+def apply_hotfix_if_needed(decompiled_dir: str, config: dict):
+    hotfixes = config.get("hotfixes", {})
+    if not hotfixes:
+        return
+
     apktool_yml_path = os.path.join(decompiled_dir, "apktool.yml")
     if not os.path.exists(apktool_yml_path):
-        print(f"[-] [Patcher] apktool.yml not found. Cannot apply suffix '{suffix}'.")
         return
 
     with open(apktool_yml_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    # מחפש את שורת הגרסה ומוסיף את הסיומת לפני המרכאות הסוגרות
     pattern = re.compile(r"(versionName:\s*)(['\"]?)(.*?)\2")
     match = pattern.search(content)
     if match:
-        old_ver = match.group(3)
-        if not old_ver.endswith(suffix):
-            new_content = pattern.sub(rf"\g<1>\g<2>{old_ver}{suffix}\g<2>", content, count=1)
+        base_ver = match.group(3)
+        suffix = hotfixes.get(base_ver)
+        
+        # אם יש סיומת לגרסה הזו והיא עדיין לא הוספה
+        if suffix and not base_ver.endswith(suffix):
+            new_content = pattern.sub(rf"\g<1>\g<2>{base_ver}{suffix}\g<2>", content, count=1)
             with open(apktool_yml_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
-            print(f"    [+][Patcher] Applied version suffix: {old_ver} -> {old_ver}{suffix}")
-        else:
-            print(f"    [i] [Patcher] Version suffix '{suffix}' already applied.")
-    else:
-        print(f"[-] [Patcher] Could not find versionName in apktool.yml")
-
+            print(f"    [+] [Patcher] Applied hotfix suffix: {base_ver} -> {base_ver}{suffix}")
+            
 def run_patch(app_id: str, decompiled_dir: str) -> bool:
     """
     Import apps/{app_id}/patch.py and call its patch(decompiled_dir) function.
