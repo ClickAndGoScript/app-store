@@ -13,11 +13,11 @@ def patch(decompiled_dir: str) -> bool:
     spi = _patch_secure_pending_intent(decompiled_dir)
     browser = _patch_force_external_browser(decompiled_dir)
     
-    # 3. טיפול בסטטוסים (מהשורש)
+    # 3. טיפול בסטטוסים
     status_nuke = _patch_nuke_status_activity(decompiled_dir)
     status_redirect = _patch_redirect_status_intents(decompiled_dir)
     
-    # 4. חסימת טאב הגיפים (Expressions Tray)
+    # 4. חסימת טאב הגיפים
     gifs_tab = _patch_gifs_tab(decompiled_dir)
 
     results = [photos, newsletter, tabs, spi, browser, status_nuke, status_redirect, gifs_tab]
@@ -61,7 +61,6 @@ def _patch_profile_photos(root_dir):
         else:
             print("    [-] Photo loader signatures not found.")
             return False
-
     except Exception as e:
         print(f"    [-] Error: {e}")
         return False
@@ -98,7 +97,6 @@ def _patch_newsletter_launcher(root_dir):
         else:
             print("    [-] Newsletter launcher signatures not found.")
             return False
-
     except Exception as e:
         print(f"    [-] Error: {e}")
         return False
@@ -141,7 +139,6 @@ def _patch_home_tabs(root_dir):
         else:
             print("    [-] Home Tabs: Target method found, but regex failed.")
             return False
-
     except Exception as e:
         print(f"    [-] Error: {e}")
         return False
@@ -170,7 +167,6 @@ def _patch_secure_pending_intent(root_dir):
         else:
             print("    [-] Check not found or already bypassed.")
             return True
-
     except Exception as e:
         print(f"    [-] Error: {e}")
         return False
@@ -188,22 +184,15 @@ def _patch_force_external_browser(root_dir):
         return False
 
     try:
-        with open(target_file, 'r', encoding='utf-8') as f:
-            content = f.read()
+        with open(target_file, 'r', encoding='utf-8') as f: content = f.read()
 
         super_class_match = re.search(r"^\.super\s+(L[^;]+;)", content, re.MULTILINE)
-        if not super_class_match:
-            return False
+        if not super_class_match: return False
         parent_class = super_class_match.group(1)
 
-        method_pattern = re.compile(
-            r"(\.method public onCreate\(Landroid\/os\/Bundle;\)V)(.*?)(\.end method)",
-            re.DOTALL
-        )
-        
+        method_pattern = re.compile(r"(\.method public onCreate\(Landroid\/os\/Bundle;\)V)(.*?)(\.end method)", re.DOTALL)
         match = method_pattern.search(content)
-        if not match:
-            return False
+        if not match: return False
 
         original_body = match.group(2)
         new_body = f"""
@@ -240,8 +229,7 @@ def _patch_force_external_browser(root_dir):
     return-void
 """
         new_content = content.replace(original_body, new_body)
-        with open(target_file, 'w', encoding='utf-8') as f:
-            f.write(new_content)
+        with open(target_file, 'w', encoding='utf-8') as f: f.write(new_content)
         print(f"    [+] Browser hijacked successfully!")
         return True
     except Exception as e:
@@ -249,7 +237,7 @@ def _patch_force_external_browser(root_dir):
         return False
 
 # ---------------------------------------------------------
-# 6. הריגת נגן הסטטוסים (Shell Replacement)
+# 6. הריגת נגן הסטטוסים
 # ---------------------------------------------------------
 def _patch_nuke_status_activity(root_dir):
     target_filename = "StatusPlaybackActivity.smali"
@@ -261,13 +249,9 @@ def _patch_nuke_status_activity(root_dir):
         return False
 
     try:
-        with open(target_file, 'r', encoding='utf-8') as f:
-            content = f.read()
-
+        with open(target_file, 'r', encoding='utf-8') as f: content = f.read()
         super_match = re.search(r"^\.super\s+(L[^;]+;)", content, re.MULTILINE)
-        if not super_match:
-            print("    [-] Could not determine parent class from source.")
-            return False
+        if not super_match: return False
         
         parent_class = super_match.group(1)
         print(f"    [i] Detected parent class: {parent_class}")
@@ -290,18 +274,15 @@ def _patch_nuke_status_activity(root_dir):
     return-void
 .end method
 """
-        with open(target_file, 'w', encoding='utf-8') as f:
-            f.write(new_content)
-            
+        with open(target_file, 'w', encoding='utf-8') as f: f.write(new_content)
         print(f"    [+] StatusPlaybackActivity replaced with zombie shell.")
         return True
-
     except Exception as e:
         print(f"    [-] Error nuking status activity: {e}")
         return False
 
 # ---------------------------------------------------------
-# 7. הטיית הפניות לסטטוס (Redirection)
+# 7. הטיית הפניות לסטטוס
 # ---------------------------------------------------------
 def _patch_redirect_status_intents(root_dir):
     target_status_class = "Lcom/whatsapp/status/playback/StatusPlaybackActivity;"
@@ -327,7 +308,6 @@ def _patch_redirect_status_intents(root_dir):
                 path = os.path.join(root, file)
                 try:
                     with open(path, 'r', encoding='utf-8') as f: content = f.read()
-                    
                     if target_status_class in content:
                         new_content = content.replace(target_status_class, final_redirect)
                         with open(path, 'w', encoding='utf-8') as f: f.write(new_content)
@@ -338,7 +318,7 @@ def _patch_redirect_status_intents(root_dir):
     return True
 
 # ---------------------------------------------------------
-# 8. הסרת טאב הגיפים מלוח הביטויים (Expressions Tray)
+# 8. הסרת טאב הגיפים - גרסה רובוסטית ואגרסיבית
 # ---------------------------------------------------------
 def _patch_gifs_tab(root_dir):
     anchor = "ExpressionsKeyboardOpener = "
@@ -354,25 +334,38 @@ def _patch_gifs_tab(root_dir):
             content = f.read()
         original_content = content
 
-        # 1. Identify GIF class dynamically (strict adjacent pattern)
+        # תבנית שמחפשת את הפקודה שמוסיפה אובייקט לרשימה (v3) מיד לפני הבדיקה של this$0.A00
+        # זה תמיד אובייקט ה-GIF (שנמצא לפני הסטיקרים).
         gif_class_pattern = re.compile(
-            r"sget-object [vp]\d+,\s*(L[^;]+;)->A00:L[^;]+;\s*"
-            r"invoke-(?:virtual|interface) \{[vp]\d+,\s*[vp]\d+\},\s*Ljava/util/[a-zA-Z]+;->add\(Ljava/lang/Object;\)Z\s*"
-            r"iget-object [vp]\d+,\s*[vp]\d+,\s*L[^;]+;->\w+:L[^;]+;\s*"
-            r"invoke-(?:virtual|interface) \{[vp]\d+\},\s*L[^;]+;->\w+\(\)Z"
+            r"sget-object [vp]\d+,\s*(L[^;]+;)->A00:L[^;]+;\s+"
+            r"(?:\.line \d+\s+)*"
+            r"invoke-(?:virtual|interface) \{[vp]\d+,\s*[vp]\d+\},\s*Ljava/util/[a-zA-Z]+;->add\(Ljava/lang/Object;\)Z\s+"
+            r"(?:\.line \d+\s+)*"
+            r"invoke-(?:static|virtual) \{[vp]\d+\},\s*L[^;]+;->\w+\(.*\)Z"
         )
         
         match = gif_class_pattern.search(content)
+        
+        # --- בלוק Debug מתקדם ---
         if not match:
-            print("    [-] Could not dynamically identify GIF class pattern.")
+            print("    [-] Failed to find dynamic GIF class. Printing debug log:")
+            start = content.find("invokeSuspend(Ljava/lang/Object;)Ljava/lang/Object;")
+            if start != -1:
+                end = content.find(".end method", start)
+                method_body = content[start:end]
+                print("    [DEBUG] Elements found in array generation:")
+                lines = method_body.split('\n')
+                for idx, line in enumerate(lines):
+                    if "sget-object" in line and "->A00" in line:
+                        print(f"      > {line.strip()}")
             return False
             
         gif_class = match.group(1)
-        print(f"    [i] Identified GIF class automatically: {gif_class}")
+        print(f"    [i] Identified GIF class: {gif_class}")
 
-        # 2. Patch Opener 11 (the goto case)
+        # טיפול ב-goto (Opener 11)
         match_goto = re.search(
-            rf"sget-object ([vp]\d+),\s*{re.escape(gif_class)};->A00:{re.escape(gif_class)};\s+goto (:goto_\w+)", 
+            rf"sget-object ([vp]\d+),\s*{re.escape(gif_class)};->A00:{re.escape(gif_class)};\s+(?:\.line \d+\s+)*goto (:goto_\w+)", 
             content
         )
         
@@ -380,36 +373,31 @@ def _patch_gifs_tab(root_dir):
             reg_v = match_goto.group(1)
             goto_lbl = match_goto.group(2)
             
-            # Find the label definition
             lbl_pattern = re.compile(
-                rf"^\s*{goto_lbl}\s+invoke-(?:virtual|interface) \{{[vp]\d+,\s*{reg_v}\}},\s*Ljava/util/[a-zA-Z]+;->add\(Ljava/lang/Object;\)Z", 
+                rf"^\s*{goto_lbl}\s+"
+                rf"(?:\.line \d+\s+)*"
+                rf"invoke-(?:virtual|interface) \{{[vp]\d+,\s*{reg_v}\}},\s*Ljava/util/[a-zA-Z]+;->add\(Ljava/lang/Object;\)Z", 
                 re.MULTILINE
             )
             lbl_match = lbl_pattern.search(content)
             
             if lbl_match:
-                # Insert skip label right after the `add`
                 content = content[:lbl_match.end()] + "\n    :goto_skip_gif_11" + content[lbl_match.end():]
-                
-                # Replace the original goto to jump to the skip label
                 content = re.sub(
-                    rf"sget-object {reg_v},\s*{re.escape(gif_class)};->A00:{re.escape(gif_class)};\s+goto {goto_lbl}",
-                    "goto :goto_skip_gif_11",
+                    rf"sget-object {reg_v},\s*{re.escape(gif_class)};->A00:{re.escape(gif_class)};(\s*\.line \d+\s*)*goto {goto_lbl}",
+                    r"goto :goto_skip_gif_11",
                     content
                 )
-                print(f"    [+] Opener 11 patched (Jump redirected to :goto_skip_gif_11).")
-            else:
-                print("    [-] Warning: Could not find label definition for Opener 11.")
-        else:
-            print("    [-] Warning: Could not find Opener 11 goto pattern (maybe already patched).")
+                print(f"    [+] Opener 11 patched (Jump bypassed).")
 
-        # 3. Patch all standard unconditional additions
+        # טיפול בהוספה רגילה בשאר הבלוקים
         add_pattern = re.compile(
-            rf"\s*sget-object ([vp]\d+),\s*{re.escape(gif_class)};->A00:{re.escape(gif_class)};\s*"
-            rf"invoke-(?:virtual|interface) \{{[vp]\d+,\s*\1\}},\s*Ljava/util/[a-zA-Z]+;->add\(Ljava/lang/Object;\)Z"
+            rf"\s*sget-object ([vp]\d+),\s*{re.escape(gif_class)};->A00:{re.escape(gif_class)};"
+            rf"(?:\s*\.line \d+)*"
+            rf"\s*invoke-(?:virtual|interface) \{{[vp]\d+,\s*\1\}},\s*Ljava/util/[a-zA-Z]+;->add\(Ljava/lang/Object;\)Z"
         )
         content, subs_count = add_pattern.subn("", content)
-        print(f"    [+] Removed {subs_count} standard GIF tab additions.")
+        print(f"    [+] Removed {subs_count} GIF tab additions from normal openers.")
 
         if content != original_content:
             with open(target_file, 'w', encoding='utf-8') as f:
