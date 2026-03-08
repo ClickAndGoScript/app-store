@@ -318,11 +318,11 @@ def _patch_redirect_status_intents(root_dir):
     return True 
  
 # --------------------------------------------------------- 
-# 8. אלגוריתם חכם ודינאמי לחסימת הגיפים (Line-by-Line Parser) 
+# 8. אלגוריתם חכם ומוחלט לחסימת הגיפים (מבוסס חקר קוד) 
 # --------------------------------------------------------- 
 def _patch_gifs_tab(root_dir): 
     anchor = "ExpressionsKeyboardOpener = " 
-    print(f"\n[8] Executing Smart GIF Tab Removal (Obfuscation-Resilient)...") 
+    print(f"\n[8] Executing Surgical GIF Removal...") 
      
     target_file = _find_file_by_string(root_dir, anchor) 
     if not target_file: 
@@ -333,96 +333,104 @@ def _patch_gifs_tab(root_dir):
         with open(target_file, 'r', encoding='utf-8') as f: 
             lines = f.read().split('\n') 
              
-        # 1. מציאת כל המחלקות שמייצגות טאבים בסדר הופעתן (אימוג'י, גיפים, סטיקרים, אווטאר)
+        # 1. חילוץ כל המחלקות שנטענות למקלדת הטאבים
         pattern = re.compile(r"sget-object\s+[vp]\d+,\s+(LX/[A-Za-z0-9_]+;)->A00:\1") 
-        unique_classes =[] 
+        classes = set() 
         for line in lines: 
             match = pattern.search(line) 
             if match: 
                 cls = match.group(1) 
-                if cls not in unique_classes: 
-                    unique_classes.append(cls) 
+                if "0Jv" not in cls and "0N2" not in cls: 
+                    classes.add(cls) 
                      
-        if len(unique_classes) < 2: 
-            print("    [-] Not enough tab classes found to identify GIF tab.") 
+        # 2. פתיחת קבצי המחלקות וזיהוי מדויק של מחלקת הגיפים לפי המחרוזת "Gifs"
+        gif_class = None 
+         
+        for cls in classes: 
+            class_name = cls.split('/')[-1].replace(';', '') 
+            smali_filename = f"{class_name}.smali" 
+            full_path = _find_file_recursive(root_dir, smali_filename) 
+             
+            if full_path: 
+                with open(full_path, 'r', encoding='utf-8') as smali_file: 
+                    if '"Gifs"' in smali_file.read(): 
+                        gif_class = cls 
+                        break 
+         
+        if not gif_class: 
+            print("    [-] Could not confidently identify GIF class.") 
             return False 
              
-        gif_class = unique_classes[1] # המיקום ה-2 תמיד שמור לגיפים 
-        print(f"    [i] Identified GIF class automatically: {gif_class}") 
+        print(f"    [+] Confirmed GIF class: {gif_class}") 
          
-        skip_targets = {} # target_label -> skip_label 
-         
-        # שלב 1: מעבר על השורות ונטרול טעינת הגיפים
+        # 3. יישום מעקף הכירורגיה (GOTO Bypass) רק על הגיפים!
         new_lines =[] 
         removed_count = 0 
          
-        i = 0 
-        while i < len(lines): 
-            line = lines[i] 
+        insert_after = {} 
+        replace_line = {} 
+         
+        for i, line in enumerate(lines): 
+            stripped = line.strip() 
              
-            if "sget-object" in line and gif_class in line and "->A00" in line: 
-                new_lines.append(f"    # {line.strip()} (GIF BYPASS)") 
+            if "sget-object" in stripped and gif_class in stripped and "->A00" in stripped: 
+                skip_label = f":skip_gif_kosher_{removed_count}" 
                 removed_count += 1 
                  
-                # נסרוק קדימה לפקודה המשמעותית הבאה 
                 j = i + 1 
-                while j < len(lines) and (lines[j].strip() == "" or lines[j].strip().startswith(".line")): 
-                    new_lines.append(lines[j]) 
-                    j += 1 
+                while j < len(lines): 
+                    next_stripped = lines[j].strip() 
+                    # דילוג על שורות ריקות, הערות או שורות של labels (כדי לעטוף את ההוספה בזהירות)
+                    if next_stripped == "" or next_stripped.startswith(".line") or next_stripped.startswith(":"): 
+                        j += 1 
+                        continue 
+                         
+                    # מצב 1: הוספה ישירה (הפקודה הבאה היא add)
+                    if "invoke-virtual" in next_stripped and "->add(Ljava/lang/Object;)Z" in next_stripped: 
+                        insert_after[i] = insert_after.get(i, []) + [f"    goto {skip_label} # Bypass GIF"] 
+                        insert_after[j] = insert_after.get(j, []) + [f"    {skip_label}"] 
+                        break 
+                         
+                    # מצב 2: קפיצה להוספה משותפת
+                    if next_stripped.startswith("goto"): 
+                        match = re.search(r"goto(?:/16|/32)?\s+(:[a-zA-Z0-9_]+)", next_stripped) 
+                        if match: 
+                            target_label = match.group(1) 
+                            replace_line[j] = lines[j].replace(target_label, skip_label) + " # Redirected GIF" 
+                             
+                            # חיפוש התווית אליה קפצנו כדי לשתול שם את חזרת הדילוג
+                            k = 0 
+                            while k < len(lines): 
+                                if lines[k].strip() == target_label: 
+                                    m = k + 1 
+                                    while m < len(lines): 
+                                        m_stripped = lines[m].strip() 
+                                        if "invoke-virtual" in m_stripped and "->add(Ljava/lang/Object;)Z" in m_stripped: 
+                                            insert_after[m] = insert_after.get(m, []) +[f"    {skip_label}"] 
+                                            break 
+                                        m += 1 
+                                    break 
+                                k += 1 
+                        break 
+                    break 
                      
-                next_line = lines[j] 
-                 
-                if "invoke-virtual" in next_line and "->add(Ljava/lang/Object;)Z" in next_line: 
-                    # הוספה ישירה - נהפוך להערה 
-                    new_lines.append(f"    # {next_line.strip()} (GIF BYPASS)") 
-                    i = j 
-                elif "goto" in next_line: 
-                    # קפיצה להוספה משותפת - נשנה את יעד הקפיצה לתווית דילוג שניצור 
-                    match = re.search(r"goto(?:/16|/32)?\s+(:[a-zA-Z0-9_]+)", next_line) 
-                    if match: 
-                        target_label = match.group(1) 
-                        skip_label = f"{target_label}_skip_gif" 
-                        skip_targets[target_label] = skip_label 
-                        new_lines.append(next_line.replace(target_label, skip_label) + " # Redirected for GIF bypass") 
-                    i = j 
-                else: 
-                    # לא ברור - נשמור את השורה כרגיל 
-                    pass  
+        # בנייה מחדש של הקובץ
+        for i, line in enumerate(lines): 
+            if i in replace_line: 
+                new_lines.append(replace_line[i]) 
             else: 
                 new_lines.append(line) 
-            i += 1 
-             
-        # שלב 2: שתילת תוויות הדילוג המיוחדות אחרי בלוקים משותפים 
-        if skip_targets: 
-            final_lines =[] 
-            i = 0 
-            while i < len(new_lines): 
-                line = new_lines[i] 
-                final_lines.append(line) 
                  
-                stripped = line.strip() 
-                if stripped in skip_targets: 
-                    skip_label = skip_targets[stripped] 
-                    # מצאנו את התווית המקורית. נחפש את ה-add שבא אחריה ונשתול את תווית הדילוג מיד לאחריו 
-                    j = i + 1 
-                    while j < len(new_lines): 
-                        final_lines.append(new_lines[j]) 
-                        if "invoke-virtual" in new_lines[j] and "->add(Ljava/lang/Object;)Z" in new_lines[j]: 
-                            final_lines.append(f"    {skip_label}") 
-                            break 
-                        j += 1 
-                    i = j 
-                i += 1 
-        else: 
-            final_lines = new_lines 
- 
+            if i in insert_after: 
+                new_lines.extend(insert_after[i]) 
+                 
         if removed_count > 0: 
             with open(target_file, 'w', encoding='utf-8') as f: 
-                f.write('\n'.join(final_lines)) 
-            print(f"    [+] Successfully neutralized {removed_count} GIF tab additions.") 
+                f.write('\n'.join(new_lines)) 
+            print(f"    [+] Successfully bypassed {removed_count} GIF additions!") 
             return True 
         else: 
-            print("    [-] Could not find 'add' instructions to neutralize.") 
+            print("    [-] Failed to patch, no additions found.") 
             return False 
              
     except Exception as e: 
