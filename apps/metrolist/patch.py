@@ -21,6 +21,11 @@ def patch(decompiled_dir: str) -> bool:
     # 1. חסימת תמונות קטנות (Thumbnails) ברמת האפליקציה
     thumbnail_patched = _patch_thumbnail(decompiled_dir)
     
+    # עצירת התהליך והחזרת שגיאה אם הפאץ' של התמונות נכשל
+    if not thumbnail_patched:
+        print("[-] CRITICAL: Failed to patch Thumbnail.smali. Patch failed.")
+        return False
+    
     # 2. חיפוש דינמי של קובץ ה-WebViewClient הרלוונטי
     webview_client_file = _find_webview_client_target(decompiled_dir)
     
@@ -35,7 +40,6 @@ def patch(decompiled_dir: str) -> bool:
         print("[-] CRITICAL: Failed to patch the WebViewClient file. Patch failed.")
         return False
         
-    print(f"[i] Thumbnail patch status: {'Success' if thumbnail_patched else 'Skipped/Failed'}")
     print("[+] MetroList patch applied successfully.")
     return True
 
@@ -50,7 +54,7 @@ def _patch_thumbnail(root_dir):
             try:
                 with open(target_path, 'r', encoding='utf-8') as f: content = f.read()
                 
-                pattern = r'(iput-object p2, p0, Lcom/metrolist/innertube/models/Thumbnail;->a:Ljava/lang/String;)'
+                pattern = r'(iput-object p2, p0, Lcom/metrolist/innertube/models/Thumbnail;->(?:a|url):Ljava/lang/String;)'
                 if re.search(pattern, content):
                     new_content = re.sub(pattern, r'const-string p2, ""\n    \1', content)
                     with open(target_path, 'w', encoding='utf-8') as f: f.write(new_content)
