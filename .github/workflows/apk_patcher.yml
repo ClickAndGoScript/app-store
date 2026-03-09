@@ -70,6 +70,8 @@ jobs:
 
       - name: Install System Dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y apktool zipalign apksigner
           pip install -r requirements.txt
           npm install -g apk-mitm
 
