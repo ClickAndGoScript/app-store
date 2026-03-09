@@ -71,10 +71,10 @@ jobs:
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y apktool zipalign apksigner
+          sudo apt-get install -y zipalign apksigner
           pip install -r requirements.txt
           npm install -g apk-mitm
-
+          APKTOOL_URL=$(curl -s https://api.github.com/repos/iBotPeaches/Apktool/releases/latest | jq -r '.assets
       # ── Download & Pre-Patch ──
       # The pre-patch logic (like Schwartzblat for WhatsApp) is now inside run.py
       - name: Check for updates & download
