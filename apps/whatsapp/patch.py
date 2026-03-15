@@ -452,29 +452,20 @@ def _patch_mime_type_crash(root_dir):
     try: 
         with open(target_file, 'r', encoding='utf-8') as f: content = f.read() 
  
-        regex_pattern = r"(invoke-virtual\s*\{[vp]\d+,\s*[vp]\d+\},\s*Landroid/webkit/MimeTypeMap;->getMimeTypeFromExtension\(Ljava/lang/String;\)Ljava/lang/String;.*?move-result-object\s+([vp]\d+))" 
+        # Regex חכם וכללי יותר: 
+        # תופס קריאות static ו-virtual.
+        # תופס כל אחת מהפונקציות המוכרות שגורמות לקריסות במכשירי נטפרי.
+        regex_pattern = r"(invoke-(?:virtual|static)(?:/range)?\s*\{[^}]+\},\s*Landroid/webkit/MimeTypeMap;->(?:getMimeTypeFromExtension|getExtensionFromMimeType|getFileExtensionFromUrl)\(Ljava/lang/String;\)Ljava/lang/String;.*?move-result-object\s+([vp]\d+))" 
  
         if re.search(regex_pattern, content, re.DOTALL): 
             safe_replacement = r"const/4 \2, 0x0 # Bypassed OS Crash (Kosher Patch)" 
-            new_content = re.sub(regex_pattern, safe_replacement, content, flags=re.DOTALL) 
+            new_content, count = re.subn(regex_pattern, safe_replacement, content, flags=re.DOTALL) 
              
             with open(target_file, 'w', encoding='utf-8') as f: f.write(new_content) 
-            print(f"    [+] Successfully neutralized OS MimeType query in {os.path.basename(target_file)}") 
+            print(f"    [+] Successfully neutralized {count} OS MimeType queries in {os.path.basename(target_file)}") 
             return True 
         else: 
             print("    [-] File found, but API call signature did not match.") 
-            print("    [DEBUG] Dumping relevant Smali context for debugging:")
-            lines = content.split('\n')
-            for i, line in enumerate(lines):
-                # מחפש את המיקום המדויק ומדפיס 15 שורות לפני ואחרי
-                if 'MimeTypeMap' in line or 'SecureFileBuilder' in line:
-                    start = max(0, i - 15)
-                    end = min(len(lines), i + 15)
-                    print(f"\n--- Context around line {i+1} ---")
-                    for j in range(start, end):
-                        prefix = ">> " if j == i else "   "
-                        print(f"{prefix}{j+1}: {lines[j]}")
-            print("\n    [DEBUG] Finished dumping context.")
             return False 
     except Exception as e: 
         print(f"    [-] Error patching MimeType crash: {e}") 
