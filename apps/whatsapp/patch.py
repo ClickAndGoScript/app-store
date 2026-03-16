@@ -493,9 +493,9 @@ def extract_original_signature(apk_path: str) -> str:
 # --- מודולי הפאצ' ---
 
 def _patch_kotlin_null_check(decompiled_dir: str) -> bool:
-    """מוצא ומנטרל את בדיקת ה-null של קוטלין שגורמת לקריסה."""
-    print("\n[*] Applying Kotlin Null-Check Bypass...")
-    anchor_string = '"INVOKE_RETURN must not be null"'
+    """מוצא ומנטרל *רק* את הפונקציה הדינמית שמכילה את 'INVOKE_RETURN' בקוטלין."""
+    print("\n[*] Applying Kotlin Null-Check Bypass (INVOKE_RETURN only)...")
+    anchor_string = '"INVOKE_RETURN"'
     
     for root, _, files in os.walk(decompiled_dir):
         for file in files:
@@ -507,46 +507,51 @@ def _patch_kotlin_null_check(decompiled_dir: str) -> bool:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     content = f.read()
 
+                # מזהה את הקובץ הייחודי
                 if anchor_string not in content:
                     continue
                     
-                # מצאנו את הקובץ הנכון (לדוגמה, LX/00C.smali)
                 print(f"    [+] Found Kotlin Intrinsics class: {os.path.relpath(file_path, decompiled_dir)}")
-
-                # דפוס רג'קס שמזהה את כל הפונקציה שמכילה את המחרוזת
+                
+                # ביטוי רגולרי שתופס *אך ורק* את הפונקציה שמכילה את "INVOKE_RETURN" בתוכה
                 method_pattern = re.compile(
-                    r"(\.method public static \w+\(Ljava/lang/Object;\)V[\s\S]*?" + re.escape(anchor_string) + r"[\s\S]*?\.end method)"
+                    r"(\.method public static \w+\(Ljava/lang/Object;\)V)([\s\S]*?\"INVOKE_RETURN\"[\s\S]*?)(\.end method)"
                 )
                 
                 match = method_pattern.search(content)
                 if not match:
-                    print("    [-] Found anchor string but could not isolate method block.")
-                    return False
+                    print("    [-] Found anchor string but could not isolate the specific method.")
+                    continue
                 
-                method_block = match.group(1)
+                signature = match.group(1)
+                body = match.group(2)
+                end_method = match.group(3)
                 
-                # חילוץ חתימת המתודה המקורית
-                signature_line = method_block.split('\n', 1)[0]
+                # חילוץ שורת ה-registers המקורית מהגוף של הפונקציה (בד"כ ".registers 1")
+                registers_line = "    .registers 1" # גיבוי
+                for line in body.splitlines():
+                    clean_line = line.strip()
+                    if clean_line.startswith(".registers") or clean_line.startswith(".locals"):
+                        registers_line = "    " + clean_line
+                        break
                 
-                # בניית הפונקציה החדשה והריקה
-                new_method = f"""{signature_line}
-    .registers 1
-    # Bypassed to prevent Firebase/Kotlin crashes
-    return-void
-.end method"""
+                # בניית הפונקציה המרוקנת מתוכן מזיק (רק חוזרת מיד)
+                new_method = f"{signature}\n{registers_line}\n    # Neutralized INVOKE_RETURN crash\n    return-void\n{end_method}"
                 
-                # החלפה בקובץ
-                new_content = content.replace(method_block, new_method)
+                # החלפת הפונקציה הספציפית בקובץ
+                new_content = content.replace(match.group(0), new_method)
+                
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(new_content)
+                    
+                print("    [+] Successfully neutralized the specific INVOKE_RETURN method.")
+                return True # מצאנו וטיפלנו, אפשר לסיים את הסריקה
+                
+            except Exception as e:
+                print(f"    [-] Error processing file: {e}")
+                continue
 
-                print("    [+] Successfully neutralized INVOKE_RETURN null check.")
-                return True # הצלחנו, אין צורך להמשיך לסרוק קבצים
-
-            except Exception:
-                continue # דלג על קבצים שאי אפשר לקרוא
-
-    print("    [-] CRITICAL: Could not find the Kotlin null-check method.")
+    print("    [-] CRITICAL: Could not find or patch the INVOKE_RETURN method.")
     return False
 
 def _patch_signature_bypass(decompiled_dir: str) -> bool:
