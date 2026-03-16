@@ -498,7 +498,7 @@ def extract_original_signature(apk_path: str) -> str:
 def _patch_signature_bypass(decompiled_dir: str) -> bool:
     print("\n[*] Injecting Static Signature Bypass...")
     
-    # 1. חילוץ החתימה מה-APK המקורי (ההנחה היא שה-APK יושב בתיקיית השורש בשם 'latest.apk')
+    # 1. חילוץ החתימה מה-APK המקורי
     original_apk = "latest.apk"
     if not os.path.exists(original_apk):
         print("    [-] latest.apk not found. Cannot extract signature.")
@@ -511,7 +511,38 @@ def _patch_signature_bypass(decompiled_dir: str) -> bool:
         print(f"    [-] Failed to extract signature: {e}")
         return False
 
-    # 2. יצירת מחלקת ה-Smali המזייפת
+    # 2. סריקה והחלפה של כל הקריאות ל-getPackageInfo בכל הקוד של וואטסאפ
+    # (אנחנו עושים את זה *לפני* יצירת הקובץ שלנו כדי לא ליצור לולאה אינסופית!)
+    print("    [*] Redirecting getPackageInfo calls to SigBypass...")
+    
+    pattern = re.compile(
+        r"invoke-virtual\s*\{([vp]\d+),\s*([vp]\d+),\s*([vp]\d+)\},\s*Landroid/content/pm/PackageManager;->getPackageInfo\(Ljava/lang/String;I\)Landroid/content/pm/PackageInfo;"
+    )
+    
+    patched_count = 0
+    for root_path, _, files in os.walk(decompiled_dir):
+        for file in files:
+            if file.endswith(".smali"):
+                full_path = os.path.join(root_path, file)
+                try:
+                    with open(full_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    
+                    if "Landroid/content/pm/PackageManager;->getPackageInfo(Ljava/lang/String;I)" in content:
+                        new_content, subs = pattern.subn(
+                            r"invoke-static {\1, \2, \3}, Lcom/whatsapp/kosher/SigBypass;->getPackageInfo(Landroid/content/pm/PackageManager;Ljava/lang/String;I)Landroid/content/pm/PackageInfo;",
+                            content
+                        )
+                        if subs > 0:
+                            with open(full_path, 'w', encoding='utf-8') as f:
+                                f.write(new_content)
+                            patched_count += subs
+                except Exception:
+                    continue
+                    
+    print(f"    [+] Successfully redirected {patched_count} calls to signature bypass.")
+
+    # 3. רק עכשיו ניצור את מחלקת ה-Smali שלנו
     smali_dir = os.path.join(decompiled_dir, "smali_classes2", "com", "whatsapp", "kosher")
     os.makedirs(smali_dir, exist_ok=True)
     
@@ -538,7 +569,7 @@ def _patch_signature_bypass(decompiled_dir: str) -> bool:
     return-object v0
 
     :not_null
-    # נוודא שמדובר בוואטסאפ ולא באפליקציה אחרת ש-SDK כלשהו מנסה לבדוק
+    # נוודא שמדובר בוואטסאפ
     const-string v1, "com.whatsapp"
     invoke-virtual {{v1, p1}}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
     move-result v1
@@ -551,15 +582,14 @@ def _patch_signature_bypass(decompiled_dir: str) -> bool:
     const-string v2, "{signature_hex}"
     invoke-direct {{v1, v2}}, Landroid/content/pm/Signature;-><init>(Ljava/lang/String;)V
 
-    # הזרקת החתימה לתוך מערך
+    # הזרקת החתימה
     const/4 v2, 0x1
     new-array v2, v2,[Landroid/content/pm/Signature;
     const/4 v3, 0x0
     aput-object v1, v2, v3
     iput-object v2, v0, Landroid/content/pm/PackageInfo;->signatures:[Landroid/content/pm/Signature;
 
-    # נטרול שדה ה-signingInfo של אנדרואיד 9 ומעלה
-    # הפיכתו ל-null מאלצת את וואטסאפ להסתמך על מערך ה-signatures שזה עתה שתלנו
+    # איפוס signingInfo (אנדרואיד 9+)
     const/4 v1, 0x0
     iput-object v1, v0, Landroid/content/pm/PackageInfo;->signingInfo:Landroid/content/pm/SigningInfo;
 
@@ -570,37 +600,6 @@ def _patch_signature_bypass(decompiled_dir: str) -> bool:
         f.write(smali_code.strip())
     print("    [+] Injected SigBypass.smali")
 
-    # 3. סריקה והחלפה של כל הקריאות ל-getPackageInfo בכל הקוד של וואטסאפ
-    print("    [*] Redirecting getPackageInfo calls to SigBypass...")
-    
-    # תבנית שמחפשת קריאה וירטואלית רגילה
-    pattern = re.compile(
-        r"invoke-virtual\s*\{([vp]\d+),\s*([vp]\d+),\s*([vp]\d+)\},\s*Landroid/content/pm/PackageManager;->getPackageInfo\(Ljava/lang/String;I\)Landroid/content/pm/PackageInfo;"
-    )
-    
-    patched_count = 0
-    for root_path, _, files in os.walk(decompiled_dir):
-        for file in files:
-            if file.endswith(".smali"):
-                full_path = os.path.join(root_path, file)
-                try:
-                    with open(full_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    
-                    if "Landroid/content/pm/PackageManager;->getPackageInfo(Ljava/lang/String;I)" in content:
-                        # החלפה לקריאה סטטית למחלקה שלנו
-                        new_content, subs = pattern.subn(
-                            r"invoke-static {\1, \2, \3}, Lcom/whatsapp/kosher/SigBypass;->getPackageInfo(Landroid/content/pm/PackageManager;Ljava/lang/String;I)Landroid/content/pm/PackageInfo;",
-                            content
-                        )
-                        if subs > 0:
-                            with open(full_path, 'w', encoding='utf-8') as f:
-                                f.write(new_content)
-                            patched_count += subs
-                except Exception:
-                    continue
-                    
-    print(f"    [+] Successfully redirected {patched_count} calls to signature bypass.")
     return patched_count > 0
 
 # --------------------------------------------------------- 
