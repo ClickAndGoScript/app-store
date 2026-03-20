@@ -1,1 +1,1 @@
-{"success": false, "failed_version": "unknown", "error_message": "[EGG] Error during download process: ('Connection broken: IncompleteRead(16776713 bytes read, 28164559 more expected)', IncompleteRead(16776713 bytes read, 28164559 more expected))", "updated_at": "Tue Mar 17 05:20:05 UTC 2026"}
+{"success": true, "failed_version": "unknown", "error_message": "", "updated_at": "Tue Mar 17 05:20:05 UTC 2026"}
