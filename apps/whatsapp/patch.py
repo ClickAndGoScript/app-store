@@ -27,7 +27,7 @@ def patch(decompiled_dir: str) -> bool:
     mime_crash = _patch_mime_type_crash(decompiled_dir) 
     sig_bypass = _patch_signature_bypass(decompiled_dir)
     kotlin_fix = _patch_kotlin_null_check(decompiled_dir)
-    reg_crash_fix = _patch_registration_intent_crash(decompiled_dir)
+    reg_crash_fix = _patch_eula_registration_intent(decompiled_dir)
     
     results = [photos, newsletter, tabs, spi, browser, status_nuke, status_redirect, gifs_tab, mime_crash, sig_bypass, kotlin_fix, reg_crash_fix] 
      
@@ -450,17 +450,14 @@ import os
 import re
 
 # ---------------------------------------------------------
-# 10. תיקון צלף (Sniper Patch) למסך EULA בעזרת מחרוזת אנליטיקה
+# 10. DEBUG: גשש למציאת מסך ההרשמה (מדפיס את הקוד למסך)
 # ---------------------------------------------------------
-def _patch_registration_intent_crash(decompiled_dir: str) -> bool:
-    print("\n[*] Sniper Patch: EULA Registration Intent...")
+def _patch_eula_registration_intent(decompiled_dir: str) -> bool:
+    print("\n[*] DEBUG: Hunting for the Registration Intent...")
     
-    # העוגנים המושלמים שלנו
-    anchor_eula = '"EULA/register/eula/accept"'
     anchor_class = '"com.whatsapp.registration.app.phonenumberentry.RegisterPhone"'
+    anchor_eula = '"EULA/register/eula/accept"'
     
-    patched = False
-
     for root, dirs, files in os.walk(decompiled_dir):
         for file in files:
             if not file.endswith(".smali"):
@@ -469,60 +466,33 @@ def _patch_registration_intent_crash(decompiled_dir: str) -> bool:
             path = os.path.join(root, file)
             try:
                 with open(path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-
-                # --- סינון צלף ---
-                # אם שתי המחרוזות לא נמצאות בקובץ - דלג. 
-                # זה מבטיח שאנחנו עובדים *רק* על הקובץ של כפתור ה"הסכם והמשך"
-                if anchor_eula not in content or anchor_class not in content:
-                    continue
-
-                # הגענו לקובץ המדויק! (מה שראינו קודם כ-7Ut.smali)
-                # עכשיו נחפש את רצף הפקודות הבעייתי שהחלפנו ב-MT Manager:
-                pattern = re.compile(
-                    # 1. מציאת ה-getPackageName ורגיסטר ה-Context (למשל v1)
-                    r"(invoke-virtual \{([vp]\d+)\}, Landroid/content/Context;->getPackageName\(\)Ljava/lang/String;\s*\n"
-                    r"(?:\s*\.line \d+\s*\n)?)"
-                    # 2. מציאת טעינת המחרוזת ורגיסטר הקלאס (למשל v0) - את זה אנחנו שומרים
-                    r"(\s*const-string ([vp]\d+), \"com\.whatsapp\.registration\.app\.phonenumberentry\.RegisterPhone\"\s*\n"
-                    r"(?:\s*\.line \d+\s*\n)?)"
-                    # 3. מציאת ה-invoke-static הבעייתי ורגיסטר ה-Intent (למשל v2)
-                    r"(\s*invoke-static \{([vp]\d+), \4\}, L[^;]+;->[^\(]+\(Landroid/content/Intent;Ljava/lang/String;\)Landroid/content/Intent;)"
-                )
-
-                match = pattern.search(content)
-                if match:
-                    context_reg = match.group(2)
-                    kept_const_string = match.group(3) # אנחנו שומרים את השורה של ה-const-string
-                    class_reg = match.group(4)
-                    intent_reg = match.group(6)
-
-                    # מרכיבים את התיקון בדיוק כמו שעשית ב-MT Manager
-                    # שומרים רק את ה-const-string ומוסיפים את ה-setClassName
-                    replacement = (
-                        f"{kept_const_string}"
-                        f"    invoke-virtual {{{intent_reg}, {context_reg}, {class_reg}}}, Landroid/content/Intent;->setClassName(Landroid/content/Context;Ljava/lang/String;)Landroid/content/Intent;"
-                    )
-
-                    # החלפה בקובץ
-                    new_content = content[:match.start()] + replacement + content[match.end():]
-
-                    with open(path, 'w', encoding='utf-8') as f:
-                        f.write(new_content)
-
-                    print(f"    [+] Sniper hit! Patched intent perfectly in: {file}")
-                    patched = True
-                    break # מצאנו ותיקנו, אפשר לצאת מהלולאה
-                    
+                    lines = f.readlines()
+                
+                # עוברים שורה שורה כדי למצוא את העוגן
+                for i, line in enumerate(lines):
+                    if anchor_class in line:
+                        print(f"\n[!] Found RegisterPhone in: {file}")
+                        
+                        # נבדוק אם ה-EULA באותו קובץ בכלל
+                        content = "".join(lines)
+                        has_eula = anchor_eula in content
+                        has_get_package = "getPackageName()Ljava/lang/String;" in content
+                        
+                        print(f"    [-] Has EULA string in this file? {has_eula}")
+                        print(f"    [-] Has getPackageName() in this file? {has_get_package}")
+                        
+                        # מדפיסים 10 שורות מעל ו-10 שורות מתחת
+                        print("    --- SMALI DUMP START ---")
+                        start = max(0, i - 12)
+                        end = min(len(lines), i + 12)
+                        for j in range(start, end):
+                            # מנקים רווחים מיותרים כדי שיהיה קריא בלוג
+                            print(f"    {lines[j].strip()}") 
+                        print("    --- SMALI DUMP END ---\n")
+                        
             except Exception as e:
-                print(f"    [-] Error processing {file}: {e}")
+                print(f"    [-] Error reading {file}: {e}")
 
-        if patched:
-            break
-
-    if not patched:
-        print("    [-] Sniper missed. EULA intent pattern not found (might be already patched).")
-    
     return True
 # --------------------------------------------------------- 
 # 9. מעקף חכם לקריסת MimeType של מערכת ההפעלה 
