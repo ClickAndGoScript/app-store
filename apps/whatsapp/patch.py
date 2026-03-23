@@ -450,14 +450,15 @@ import os
 import re
 
 # ---------------------------------------------------------
-# 10. DEBUG: גשש למציאת מסך ההרשמה (מדפיס את הקוד למסך)
+# 10. Sniper Patch: EULA Registration Intent (Bulletproof)
 # ---------------------------------------------------------
 def _patch_eula_registration_intent(decompiled_dir: str) -> bool:
-    print("\n[*] DEBUG: Hunting for the Registration Intent...")
+    print("\n[*] Sniper Patch: EULA Registration Intent...")
     
     anchor_class = '"com.whatsapp.registration.app.phonenumberentry.RegisterPhone"'
     anchor_eula = '"EULA/register/eula/accept"'
-    
+    patched = False
+
     for root, dirs, files in os.walk(decompiled_dir):
         for file in files:
             if not file.endswith(".smali"):
@@ -466,33 +467,60 @@ def _patch_eula_registration_intent(decompiled_dir: str) -> bool:
             path = os.path.join(root, file)
             try:
                 with open(path, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-                
-                # עוברים שורה שורה כדי למצוא את העוגן
-                for i, line in enumerate(lines):
-                    if anchor_class in line:
-                        print(f"\n[!] Found RegisterPhone in: {file}")
-                        
-                        # נבדוק אם ה-EULA באותו קובץ בכלל
-                        content = "".join(lines)
-                        has_eula = anchor_eula in content
-                        has_get_package = "getPackageName()Ljava/lang/String;" in content
-                        
-                        print(f"    [-] Has EULA string in this file? {has_eula}")
-                        print(f"    [-] Has getPackageName() in this file? {has_get_package}")
-                        
-                        # מדפיסים 10 שורות מעל ו-10 שורות מתחת
-                        print("    --- SMALI DUMP START ---")
-                        start = max(0, i - 12)
-                        end = min(len(lines), i + 12)
-                        for j in range(start, end):
-                            # מנקים רווחים מיותרים כדי שיהיה קריא בלוג
-                            print(f"    {lines[j].strip()}") 
-                        print("    --- SMALI DUMP END ---\n")
-                        
-            except Exception as e:
-                print(f"    [-] Error reading {file}: {e}")
+                    content = f.read()
 
+                # הסינון הכפול שלנו: מבטיח שנטפל אך ורק בקובץ של כפתור ההסכמה
+                if anchor_eula not in content or anchor_class not in content:
+                    continue
+
+                # הרג'קס המשופר והחסין: 
+                # (?:[\s\n]*\.line \d+[\s\n]*)* מתעלם לחלוטין מכמה שורות .line או רווחים יש באמצע
+                pattern = re.compile(
+                    r"(invoke-virtual \{([vp]\d+)\}, Landroid/content/Context;->getPackageName\(\)Ljava/lang/String;)"
+                    r"([\s\n]*(?:\.line \d+[\s\n]*)*)"  # מרווח גמיש 1
+                    r"(const-string ([vp]\d+), \"com\.whatsapp\.registration\.app\.phonenumberentry\.RegisterPhone\")"
+                    r"([\s\n]*(?:\.line \d+[\s\n]*)*)"  # מרווח גמיש 2
+                    r"(invoke-static \{([vp]\d+), \5\}, L[^;]+;->[^\(]+\(Landroid/content/Intent;Ljava/lang/String;\)Landroid/content/Intent;)"
+                )
+
+                match = pattern.search(content)
+                if match:
+                    context_reg = match.group(2)
+                    gap1 = match.group(3)
+                    const_string_cmd = match.group(4)
+                    class_reg = match.group(5)
+                    gap2 = match.group(6)
+                    intent_reg = match.group(8)
+
+                    # מרכיבים את התיקון:
+                    # 1. מוחקים את הקריאה ל-getPackageName המיותרת
+                    # 2. מחזירים את שורות הרווח המקוריות
+                    # 3. מציבים את הפקודה התקנית
+                    replacement = (
+                        f"{gap1}"
+                        f"{const_string_cmd}"
+                        f"{gap2}"
+                        f"    invoke-virtual {{{intent_reg}, {context_reg}, {class_reg}}}, Landroid/content/Intent;->setClassName(Landroid/content/Context;Ljava/lang/String;)Landroid/content/Intent;"
+                    )
+
+                    new_content = content[:match.start()] + replacement + content[match.end():]
+
+                    with open(path, 'w', encoding='utf-8') as f:
+                        f.write(new_content)
+
+                    print(f"    [+] Sniper hit! Patched intent perfectly in: {file}")
+                    patched = True
+                    break
+                    
+            except Exception as e:
+                print(f"    [-] Error processing {file}: {e}")
+
+        if patched:
+            break
+
+    if not patched:
+        print("    [-] Sniper missed. Could not find the exact smali pattern.")
+    
     return True
 # --------------------------------------------------------- 
 # 9. מעקף חכם לקריסת MimeType של מערכת ההפעלה 
