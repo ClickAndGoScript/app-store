@@ -446,65 +446,84 @@ def _patch_gifs_tab(root_dir):
         print(f"    [-] Error patching GIF tab: {e}") 
         return False
 
-# ---------------------------------------------------------
-# 10. תיקון כירורגי לקריסת מסך ההרשמה (עקב שינוי שם חבילה)
-# ---------------------------------------------------------
-def _patch_registration_intent_crash(decompiled_dir: str) -> bool:
-    target_filename = "7Ut.smali"
-    print(f"\n[*] Surgically patching Registration Intent Crash ({target_filename})...")
+import os
+import re
 
-    target_file = None
+# ---------------------------------------------------------
+# 10. תיקון צלף (Sniper Patch) למסך EULA בעזרת מחרוזת אנליטיקה
+# ---------------------------------------------------------
+def _patch_eula_registration_intent(decompiled_dir: str) -> bool:
+    print("\n[*] Sniper Patch: EULA Registration Intent...")
+    
+    # העוגנים המושלמים שלנו
+    anchor_eula = '"EULA/register/eula/accept"'
+    anchor_class = '"com.whatsapp.registration.app.phonenumberentry.RegisterPhone"'
+    
+    patched = False
+
     for root, dirs, files in os.walk(decompiled_dir):
-        if 'X' in os.path.basename(root) and target_filename in files:
-            target_file = os.path.join(root, target_filename)
+        for file in files:
+            if not file.endswith(".smali"):
+                continue
+
+            path = os.path.join(root, file)
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                # --- סינון צלף ---
+                # אם שתי המחרוזות לא נמצאות בקובץ - דלג. 
+                # זה מבטיח שאנחנו עובדים *רק* על הקובץ של כפתור ה"הסכם והמשך"
+                if anchor_eula not in content or anchor_class not in content:
+                    continue
+
+                # הגענו לקובץ המדויק! (מה שראינו קודם כ-7Ut.smali)
+                # עכשיו נחפש את רצף הפקודות הבעייתי שהחלפנו ב-MT Manager:
+                pattern = re.compile(
+                    # 1. מציאת ה-getPackageName ורגיסטר ה-Context (למשל v1)
+                    r"(invoke-virtual \{([vp]\d+)\}, Landroid/content/Context;->getPackageName\(\)Ljava/lang/String;\s*\n"
+                    r"(?:\s*\.line \d+\s*\n)?)"
+                    # 2. מציאת טעינת המחרוזת ורגיסטר הקלאס (למשל v0) - את זה אנחנו שומרים
+                    r"(\s*const-string ([vp]\d+), \"com\.whatsapp\.registration\.app\.phonenumberentry\.RegisterPhone\"\s*\n"
+                    r"(?:\s*\.line \d+\s*\n)?)"
+                    # 3. מציאת ה-invoke-static הבעייתי ורגיסטר ה-Intent (למשל v2)
+                    r"(\s*invoke-static \{([vp]\d+), \4\}, L[^;]+;->[^\(]+\(Landroid/content/Intent;Ljava/lang/String;\)Landroid/content/Intent;)"
+                )
+
+                match = pattern.search(content)
+                if match:
+                    context_reg = match.group(2)
+                    kept_const_string = match.group(3) # אנחנו שומרים את השורה של ה-const-string
+                    class_reg = match.group(4)
+                    intent_reg = match.group(6)
+
+                    # מרכיבים את התיקון בדיוק כמו שעשית ב-MT Manager
+                    # שומרים רק את ה-const-string ומוסיפים את ה-setClassName
+                    replacement = (
+                        f"{kept_const_string}"
+                        f"    invoke-virtual {{{intent_reg}, {context_reg}, {class_reg}}}, Landroid/content/Intent;->setClassName(Landroid/content/Context;Ljava/lang/String;)Landroid/content/Intent;"
+                    )
+
+                    # החלפה בקובץ
+                    new_content = content[:match.start()] + replacement + content[match.end():]
+
+                    with open(path, 'w', encoding='utf-8') as f:
+                        f.write(new_content)
+
+                    print(f"    [+] Sniper hit! Patched intent perfectly in: {file}")
+                    patched = True
+                    break # מצאנו ותיקנו, אפשר לצאת מהלולאה
+                    
+            except Exception as e:
+                print(f"    [-] Error processing {file}: {e}")
+
+        if patched:
             break
-            
-    if not target_file:
-        print(f"    [-] {target_filename} not found in expected directory. Skipping.")
-        return True
 
-    try:
-        with open(target_file, 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        # מוחק את הקריאה ל-getPackageName() ואת פונקציית העזר הבעייתית
-        # ומחליף אותה בקריאה ל-setClassName
-        pattern = re.compile(
-            r"(\.line \d+\s*\n\s*invoke-virtual \{([vp]\d+)\}, Landroid/content/Context;->getPackageName\(\)Ljava/lang/String;\s*\n\s*\.line \d+\s*\n\s*const-string ([vp]\d+), \"com.whatsapp.registration.app.phonenumberentry.RegisterPhone\"\s*\n\s*\.line \d+\s*\n\s*)invoke-static \{([vp]\d+), \3\}, LX/1kW;->A07\(Landroid/content/Intent;Ljava/lang/String;\)Landroid/content/Intent;",
-            re.MULTILINE
-        )
-        
-        match = pattern.search(content)
-        if not match:
-            print("    [i] Registration intent pattern not found (already patched or code changed).")
-            return True
-
-        # הרגיסטרים שלכדנו:
-        leading_code = match.group(1)   # קוד מקדים שצריך לשמור
-        context_reg = match.group(2)    # הרגיסטר שמחזיק את ה-Context
-        class_name_reg = match.group(3) # הרגיסטר עם שם המחלקה
-        intent_reg = match.group(4)     # הרגיסטר עם ה-Intent
-
-        # בניית קוד התיקון המדויק
-        replacement = (
-            f"{leading_code}"
-            f"invoke-virtual {{{intent_reg}, {context_reg}, {class_name_reg}}}, Landroid/content/Intent;->setClassName(Landroid/content/Context;Ljava/lang/String;)Landroid/content/Intent;"
-        )
-
-        new_content, count = pattern.subn(replacement, content)
-
-        if count > 0:
-            with open(target_file, 'w', encoding='utf-8') as f:
-                f.write(new_content)
-            print("    [+] Successfully patched the hardcoded registration intent!")
-            return True
-        else:
-             print("    [-] Failed to apply substitution.")
-             return False
-
-    except Exception as e:
-        print(f"    [-] Error patching registration intent: {e}")
-        return False
+    if not patched:
+        print("    [-] Sniper missed. EULA intent pattern not found (might be already patched).")
+    
+    return True
 # --------------------------------------------------------- 
 # 9. מעקף חכם לקריסת MimeType של מערכת ההפעלה 
 # --------------------------------------------------------- 
