@@ -256,4 +256,25 @@ def patch(decompiled_dir: str) -> bool:
                                 "    # --- END INJECTION ---\n\n    "
                             )
                             
-                            new_method_body = method_body[:last_return_idx] + updater_call
+                            new_method_body = method_body[:last_return_idx] + updater_call + method_body[last_return_idx:]
+                            new_full_method = match.group(1) + new_method_body + match.group(3)
+                            main_smali_content = main_smali_content.replace(match.group(0), new_full_method, 1)
+
+                            with open(full_path, 'w', encoding='utf-8') as f:
+                                f.write(main_smali_content)
+                                
+                            main_activity_patched = True
+                            print(f"[+] Updater call injected successfully into {target_activity_smali}")
+                        else:
+                            print(f"[-] Could not find 'return-void' in {target_filename} onCreate().")
+                    else:
+                        print(f"[-] Could not find onCreate() in {target_filename}.")
+            except Exception as e:
+                print(f"[-] Failed to process {target_filename}: {e}")
+            break
+            
+    if not main_activity_patched:
+        print(f"[-] Error: Failed to patch {target_activity_smali}.")
+        return False
+
+    return True
