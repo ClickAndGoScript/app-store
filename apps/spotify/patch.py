@@ -22,7 +22,6 @@ def get_main_activity_smali_path(manifest_path: str) -> str:
         root = tree.getroot()
         ns = {'android': 'http://schemas.android.com/apk/res/android'}
         
-        # פונקציית עזר לבדיקה אם אלמנט מכיל הגדרות של מסך פתיחה
         def is_main_launcher(element):
             is_main = False
             is_launcher = False
@@ -37,21 +36,17 @@ def get_main_activity_smali_path(manifest_path: str) -> str:
 
         target_activity_name = None
 
-        # 1. חיפוש קודם כל בתגיות activity רגילות
         for activity in root.iter('activity'):
             if is_main_launcher(activity):
                 target_activity_name = activity.get(f"{{{ns['android']}}}name")
                 break
         
-        # 2. אם לא מצאנו (כמו בספוטיפיי), נחפש בתוך תגיות activity-alias
         if not target_activity_name:
             for alias in root.iter('activity-alias'):
                 if is_main_launcher(alias):
-                    # ב-alias, השם האמיתי נמצא במאפיין targetActivity
                     target_activity_name = alias.get(f"{{{ns['android']}}}targetActivity")
                     break
                     
-        # אם מצאנו, נמיר אותו לנתיב של קובץ Smali
         if target_activity_name:
             if target_activity_name.startswith("."):
                 target_activity_name = root.get('package') + target_activity_name
@@ -69,7 +64,24 @@ def patch(decompiled_dir: str) -> bool:
     manifest_path = os.path.join(decompiled_dir, "AndroidManifest.xml")
 
     # =========================================================================
-    # חלק 1: הלוגיקה הייחודית של ספוטיפיי (מחיקת תמונות, וידאו, ו-Worker)
+    # תיקון שגיאת הקימפול של Apktool (API 37 aapt2 Bug) - חובה להריץ בהתחלה
+    # =========================================================================
+    try:
+        with open(manifest_path, 'r', encoding='utf-8') as f:
+            manifest_content = f.read()
+        
+        # מסיר את המאפיין הבעייתי שגורם לקריסה
+        new_manifest_content = re.sub(r'\s*[a-zA-Z0-9_:]*recreateOnConfigChanges=["\'][^"\']*["\']', '', manifest_content)
+        
+        if new_manifest_content != manifest_content:
+            with open(manifest_path, 'w', encoding='utf-8') as f:
+                f.write(new_manifest_content)
+            print("[+] Successfully removed recreateOnConfigChanges from AndroidManifest.xml")
+    except Exception as e:
+        print(f"[-] Failed to fix AndroidManifest.xml compile bug: {e}")
+
+    # =========================================================================
+    # חלק 1: הלוגיקה הייחודית של ספוטיפיי 
     # =========================================================================
     print("[*] Applying Spotify-specific patches...")
     target_worker_file = "sharehousekeepingworker.smali"
@@ -108,14 +120,9 @@ def patch(decompiled_dir: str) -> bool:
     print("\n[*] Applying Universal Updater patch...")
     
     app_id = os.path.basename(current_script_dir)
-
-    # --- תיקון: זיהוי דינמי של הריפו ---
-    # מנסה לקחת את השם "User/Repo" מתוך משתני הסביבה של GitHub Actions
     repo_owner, repo_name = resolve_repository()
-
     print(f"[i] Detected Repo: {repo_owner}/{repo_name}")
 
-    
     version_txt_url = f"https://raw.githubusercontent.com/{repo_owner}/{repo_name}/refs/heads/main/apps/{app_id}/version.txt"
     download_prefix = f"https://github.com/{repo_owner}/{repo_name}/releases/download/{app_id}-v"
     download_middle = f"/{app_id}-patched-"
@@ -134,9 +141,9 @@ def patch(decompiled_dir: str) -> bool:
 
     if not os.path.exists(payload_dir):
         print("[!] Warning: Updater payload directory not found! Skipping updater injection.")
-        return True # נחזיר True כי הפאצ' של ספוטיפיי כבר עבד
+        return True
 
-    # -- א. העתקת קבצי העדכון והחלפת הפלייסהולדרים --
+    # -- א. העתקת קבצי העדכון --
     try:
         max_dex = max(
             [int(d.replace("smali_classes", "")) for d in os.listdir(decompiled_dir) if d.startswith("smali_classes") and d.replace("smali_classes", "").isdigit()]
@@ -157,8 +164,6 @@ def patch(decompiled_dir: str) -> bool:
         dst_res = os.path.join(decompiled_dir, "res")
         shutil.copytree(src_res, dst_res, dirs_exist_ok=True)
         
-        print(f"[+] Updater files copied to {next_smali_dir}/storeautoupdater.")
-
         for smali_file in os.listdir(dst_smali_root):
             smali_path = os.path.join(dst_smali_root, smali_file)
             if os.path.isfile(smali_path) and smali_path.endswith('.smali'):
@@ -178,15 +183,10 @@ def patch(decompiled_dir: str) -> bool:
         print(f"[-] Failed to copy or patch updater payload: {e}")
         return False
 
-    # -- ב. עדכון ה-AndroidManifest.xml --
+    # -- ב. הוספת ההרשאות והשירותים ל-AndroidManifest.xml --
     try:
         with open(manifest_path, 'r', encoding='utf-8') as f:
             manifest_content = f.read()
-            
-        # =====================================================================
-        # תיקון: הסרת android:recreateOnConfigChanges כדי למנוע שגיאת קומפילציה ב-Apktool
-        # =====================================================================
-        manifest_content = re.sub(r'\s*android:recreateOnConfigChanges="[^"]*"', '', manifest_content)
 
         if 'android.permission.REQUEST_INSTALL_PACKAGES' not in manifest_content:
             manifest_content = manifest_content.replace(
@@ -214,7 +214,7 @@ def patch(decompiled_dir: str) -> bool:
 
         with open(manifest_path, 'w', encoding='utf-8') as f:
             f.write(manifest_content)
-        print("[+] AndroidManifest.xml updated for updater.")
+        print("[+] AndroidManifest.xml updated for updater permissions.")
     except Exception as e:
         print(f"[-] Failed to patch AndroidManifest.xml: {e}")
         return False
