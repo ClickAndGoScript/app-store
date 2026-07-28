@@ -141,17 +141,31 @@ class UptodownSource:
                     self._log(f"Search URL: {search_url}")
                     r_search = self.scraper.get(search_url, timeout=self.timeout)
                     
-                    if r_search.url != search_url and re.match(r'https://[a-z0-9-]+\.en\.uptodown\.com/android/?$', r_search.url):
+                    # Handle auto-redirect with robust regex
+                    m_redirect = re.search(r'^(https://[a-z0-9-]+\.en\.uptodown\.com/android)', r_search.url)
+                    if r_search.url != search_url and m_redirect:
                         self._log("Search auto-redirected directly to the app page.")
-                        app_url = r_search.url.rstrip('/')
+                        app_url = m_redirect.group(1)
                     else:
                         soup_search = BeautifulSoup(r_search.text, 'html.parser')
                         candidates = []
+                        
+                        # 1. Extract from standard <a> tags (ignoring query parameters and extra sub-paths)
                         for link in soup_search.find_all('a', href=True):
-                            href = link.get('href', '').rstrip('/')
-                            if re.match(r'https://[a-z0-9-]+\.en\.uptodown\.com/android$', href):
-                                if 'uptodown-android' not in href and href not in candidates:
-                                    candidates.append(href)
+                            href = link.get('href', '')
+                            m = re.search(r'(https://[a-z0-9-]+\.en\.uptodown\.com/android)', href)
+                            if m:
+                                base_url = m.group(1)
+                                if 'uptodown-android' not in base_url and base_url not in candidates:
+                                    candidates.append(base_url)
+
+                        # 2. Fallback: Scan raw HTML/JSON text if results are dynamically rendered (Vue/React)
+                        if not candidates:
+                            self._log("No candidates found in <a> tags, scanning raw HTML/JSON...")
+                            text_clean = r_search.text.replace('\\/', '/')
+                            for match in re.findall(r'(https://[a-z0-9-]+\.en\.uptodown\.com/android)', text_clean):
+                                if 'uptodown-android' not in match and match not in candidates:
+                                    candidates.append(match)
 
                         self._log(f"Found {len(candidates)} app candidate(s)")
                         if candidates:
