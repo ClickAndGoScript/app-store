@@ -137,7 +137,7 @@ class UptodownSource:
                     search_query = " ".join(query_parts) if query_parts else package_name.replace('.', ' ')
                     search_query_escaped = search_query.replace(' ', '+')
                     
-                    search_url = f"                                         {search_query_escaped}"
+                    search_url = f"https://en.uptodown.com/android/search/{search_query_escaped}"
                     self._log(f"Search URL: {search_url}")
                     r_search = self.scraper.get(search_url, timeout=self.timeout)
                     
@@ -283,18 +283,17 @@ class UptodownSource:
             
             if not final_token:
                 if download_button and download_button.has_attr('href'):
-                     final_token = download_button.get('href').replace('https://dw.uptodown.com/dwn/', '').split('/')[0]
+                     final_token = download_button.get('href')
                 else:
                     self._log("Failed to get download token.")
                     return None, None
                     
-            final_token = final_token.strip('/')
-            
             if final_token.startswith('http'):
                 download_url = final_token
             else:
-                download_url = f"https://dw.uptodown.com/dwn/{final_token}/app.apk"
-
+                final_token = final_token.strip('/')
+                download_url = f"https://dw.uptodown.com/dwn/{final_token}"
+                
             version_name = self._get_real_version(soup_dl, download_url)
 
             self._log(f"Final version: {version_name}")
