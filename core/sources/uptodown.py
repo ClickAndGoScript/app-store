@@ -14,7 +14,7 @@ class UptodownSource:
         )
         self.scraper.headers.update({
             "Accept-Language": "en-US,en;q=0.9",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         })
 
     def _log(self, *args, **kwargs):
@@ -147,7 +147,6 @@ class UptodownSource:
                     search_url = f"https://en.uptodown.com/android/search/{search_query_escaped}"
                     self._log(f"Search URL: {search_url}")
                     r_search = self.scraper.get(search_url, timeout=self.timeout)
-                    self._log(f"Search URL status: {r_search.status_code}")
                     
                     m_redirect = re.search(r'^(https://[a-z0-9-]+\.en\.uptodown\.com/android)', r_search.url)
                     if r_search.url != search_url and m_redirect:
@@ -195,10 +194,8 @@ class UptodownSource:
                                         break
 
                             if not app_url:
-                                self._log("Failed to match any candidates.")
                                 return None, None
                         else:
-                            self._log("No candidates found in search.")
                             return None, None
 
             if not app_url:
@@ -208,24 +205,19 @@ class UptodownSource:
             download_page = f"{app_url}/download"
             self._log(f"Download page: {download_page}")
             r_dl = self.scraper.get(download_page, timeout=self.timeout)
-            self._log(f"Download page status: {r_dl.status_code}")
             
             if r_dl.status_code != 200:
                 self._log(f"CRITICAL: Failed to load download page! Received status {r_dl.status_code}")
-                self._log(f"HTML Snippet: {r_dl.text[:500]}")
                 return None, None
 
             soup_dl = BeautifulSoup(r_dl.text, 'html.parser')
 
             name_el = soup_dl.select_one('#detail-app-name')
             if not name_el:
-                self._log("CRITICAL: Could not find element '#detail-app-name' on the page!")
-                self._log("The HTML structure might have changed. Dumping snippet:")
-                self._log(r_dl.text[:800])
                 return None, None
             
-            target_file_id = name_el.get('data-file-id')
-            self._log(f"Initial target_file_id found: {target_file_id}")
+            default_file_id = name_el.get('data-file-id')
+            target_file_id = default_file_id
 
             variants_btn = soup_dl.select_one('button.variants')
             if variants_btn:
@@ -247,7 +239,6 @@ class UptodownSource:
                     
                     try:
                         r_var = self.scraper.get(variants_url, timeout=self.timeout)
-                        self._log(f"Variants page status: {r_var.status_code}")
                         if r_var.status_code == 200:
                             var_json = r_var.json()
                             var_soup = BeautifulSoup(var_json.get('content', ''), 'html.parser')
@@ -269,31 +260,24 @@ class UptodownSource:
                                     
                                 if found_format == "APK":
                                     target_file_id = el.get('data-file-id')
-                                    self._log(f"Updated target_file_id to APK variant: {target_file_id}")
                                     break
                     except Exception as e:
-                        self._log(f"Failed parsing variants: {e}")
+                        pass
+
+            # משיכת עמוד ההורדה הייעודי אם החלפנו גרסה (ללא שום תוספת "-x")
+            if target_file_id != default_file_id:
+                download_page = f"{app_url}/download/{target_file_id}"
+                self._log(f"Fetching specific variant download page: {download_page}")
+                r_dl = self.scraper.get(download_page, timeout=self.timeout)
+                soup_dl = BeautifulSoup(r_dl.text, 'html.parser')
 
             if not target_file_id:
-                self._log("CRITICAL: target_file_id is None!")
                 return None, None
                 
             self._log(f"Final selected file ID: {target_file_id}")
 
-            pre_download_url = f"{download_page}/{target_file_id}-x"
-            self._log(f"Requesting token URL: {pre_download_url}")
-            
-            self.scraper.headers.update({'Referer': download_page})
-            r_pre = self.scraper.get(pre_download_url, timeout=self.timeout)
-            self._log(f"Token URL status: {r_pre.status_code}")
-            
-            if r_pre.status_code != 200:
-                self._log(f"CRITICAL: Failed to get token page. Status: {r_pre.status_code}")
-                return None, None
-                
-            soup_pre = BeautifulSoup(r_pre.text, 'html.parser')
-
-            download_button = soup_pre.select_one('#detail-download-button')
+            # הופתקנו מה-`-x` המיותר! שולפים ישירות מהעמוד הרשמי
+            download_button = soup_dl.select_one('#detail-download-button')
             final_token = download_button.get('data-url') if download_button else None
             
             if not final_token:
@@ -301,11 +285,12 @@ class UptodownSource:
                      final_token = download_button.get('href')
                 else:
                     self._log("CRITICAL: Failed to find download token or link in button!")
-                    self._log(f"Button HTML: {download_button}")
                     return None, None
                     
             if final_token.startswith('http'):
                 download_url = final_token
+            elif final_token.startswith('/dwn/'):
+                download_url = f"https://dw.uptodown.com{final_token}"
             else:
                 final_token = final_token.strip('/')
                 download_url = f"https://dw.uptodown.com/dwn/{final_token}"
@@ -316,17 +301,28 @@ class UptodownSource:
             # --- פיענוח לינק ה-CDN הישיר ---
             self._log("Resolving final CDN URL using scraper to bypass anti-bot...")
             try:
-                self.scraper.headers.update({"Referer": pre_download_url})
-                r_final = self.scraper.get(download_url, stream=True, allow_redirects=True, timeout=30)
-                final_cdn_url = r_final.url
-                status_code = r_final.status_code
-                r_final.close()
+                # ה-Referer עכשיו מוגדר לעמוד הלגיטימי לחלוטין!
+                self.scraper.headers.update({
+                    "Referer": download_page,
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "same-site"
+                })
                 
-                if status_code < 400:
-                    self._log(f"Successfully resolved CDN URL: {final_cdn_url}")
-                    download_url = final_cdn_url 
+                # allow_redirects=False תופס את הניתוב ל-CDN בלי להוריד את הקובץ
+                r_final = self.scraper.get(download_url, allow_redirects=False, timeout=30)
+                status_code = r_final.status_code
+                self._log(f"Token resolution status: {status_code}")
+                
+                if status_code in (301, 302, 303, 307, 308):
+                    final_cdn_url = r_final.headers.get('Location')
+                    if final_cdn_url:
+                        self._log(f"Successfully resolved CDN URL: {final_cdn_url}")
+                        download_url = final_cdn_url 
+                elif status_code == 200:
+                    self._log("Warning: Token endpoint returned 200. It might be direct stream.")
                 else:
-                    self._log(f"Warning: CDN resolution returned HTTP {status_code}")
+                    self._log(f"Warning: CDN resolution failed (Status: {status_code}).")
                     
             except Exception as e:
                 self._log(f"Failed to resolve CDN URL: {e}")
@@ -337,8 +333,6 @@ class UptodownSource:
 
         except Exception as e:
             self._log(f"Exception caught in _get_uptodown_app: {e}")
-            import traceback
-            traceback.print_exc()
             return None, None
 
     # ---------- Public interface ----------
@@ -353,6 +347,7 @@ class UptodownSource:
         self._log(f"get_download_url({initial_url})")
         
         if initial_url.startswith("uptodown_direct:"):
+            # מחזיר ל-run.py את לינק ה-CDN הפתוח שתפסנו
             return initial_url.split("uptodown_direct:", 1)[1]
             
         package_name = initial_url.split("fallback:", 1)[1] if "fallback:" in initial_url else initial_url
