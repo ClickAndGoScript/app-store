@@ -50,7 +50,6 @@ class UptodownSource:
                     with outer_self.scraper.get(target_url, stream=True, headers=headers, timeout=120) as r:
                         req_self.send_response(r.status_code)
                         for k, v in r.headers.items():
-                            # סינון האדרים שעלולים לשבור את ההזרמה המקומית
                             if k.lower() not in ['transfer-encoding', 'content-encoding', 'connection', 'keep-alive']:
                                 req_self.send_header(k, v)
                         req_self.end_headers()
@@ -178,19 +177,28 @@ class UptodownSource:
                     self._log(f"Trying direct URL guess: {direct_url}")
                     try:
                         r_dir = self.scraper.get(direct_url, timeout=self.timeout)
-                        if r_dir.status_code == 200 and re.search(r'\b' + re.escape(package_name) + r'\b', r_dir.text):
-                            app_url = direct_url
-                            self._log("Direct URL guess successful.")
-                    except:
-                        pass
+                        self._log(f"Direct URL status: {r_dir.status_code}")
+                        
+                        if r_dir.status_code == 200:
+                            if 'detail-app-name' in r_dir.text or re.search(r'\b' + re.escape(package_name) + r'\b', r_dir.text):
+                                app_url = direct_url
+                                self._log("Direct URL guess successful.")
+                            else:
+                                self._log("URL works but package name not found. Falling back to search.")
+                        elif r_dir.status_code in (403, 429):
+                            self._log("Cloudflare blocked the direct URL request (probably rate-limited).")
+                    except Exception as e:
+                        self._log(f"Direct URL error: {e}")
                 
                 # 2. גיבוי דרך מנוע החיפוש
                 if not app_url:
                     search_query = " ".join(query_parts) if query_parts else package_name.replace('.', ' ')
                     search_query_escaped = search_query.replace(' ', '+')
                     
+                    # הנה התיקון הקריטי: הכתובת התקינה ללא רווחים!
                     search_url = f"https://en.uptodown.com/android/search/{search_query_escaped}"
                     self._log(f"Search URL: {search_url}")
+                    
                     r_search = self.scraper.get(search_url, timeout=self.timeout)
                     
                     # Handle auto-redirect with robust regex
@@ -202,7 +210,6 @@ class UptodownSource:
                         soup_search = BeautifulSoup(r_search.text, 'html.parser')
                         candidates = []
                         
-                        # 1. Extract from standard <a> tags
                         for link in soup_search.find_all('a', href=True):
                             href = link.get('href', '')
                             m = re.search(r'(https://[a-z0-9-]+\.en\.uptodown\.com/android)', href)
@@ -211,7 +218,6 @@ class UptodownSource:
                                 if 'uptodown-android' not in base_url and base_url not in candidates:
                                     candidates.append(base_url)
 
-                        # 2. Fallback: Scan raw HTML/JSON text
                         if not candidates:
                             self._log("No candidates found in <a> tags, scanning raw HTML/JSON...")
                             text_clean = r_search.text.replace('\\/', '/')
@@ -271,7 +277,6 @@ class UptodownSource:
             default_file_id = name_el.get('data-file-id')
             target_file_id = default_file_id
 
-            # מנגנון אלגוריתמי משופר: בודק *תמיד* את תפריט ה-Variants
             variants_btn = soup_dl.select_one('button.variants')
             if variants_btn:
                 self._log("Variants button found. Searching for a pure APK variant...")
@@ -388,7 +393,6 @@ class UptodownSource:
             target_url, _ = self._get_uptodown_app(package_name)
             
         if target_url:
-            # מפעילים את השרת המקומי (אם לא הופעל כבר) ומחזירים ל-run.py את הכתובת אליו
             self._start_proxy()
             encoded_url = urllib.parse.quote(target_url, safe='')
             proxy_url = f"http://127.0.0.1:{self.proxy_port}/?url={encoded_url}&file=app.apk"
