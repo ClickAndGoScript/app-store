@@ -133,15 +133,20 @@ class UptodownSource:
                             if 'detail-app-name' in r_dir.text or re.search(r'\b' + re.escape(package_name) + r'\b', r_dir.text):
                                 app_url = direct_url
                                 self._log("Direct URL guess successful.")
+                            else:
+                                self._log("URL works but package name not found. Falling back to search.")
                     except Exception as e:
                         self._log(f"Direct URL error: {e}")
                 
-                # 2. גיבוי דרך חיפוש (תוקן לשימוש ב- ?q= )
+                # 2. גיבוי דרך חיפוש
                 if not app_url:
-                    search_query_escaped = urllib.parse.quote_plus(package_name)
-                    search_url = f"https://en.uptodown.com/android/search?q={search_query_escaped}"
+                    search_query = " ".join(query_parts) if query_parts else package_name.replace('.', ' ')
+                    search_query_escaped = urllib.parse.quote_plus(search_query)
                     
+                    # התיקון: מבנה החיפוש התקין כדי להימנע משגיאת 410!
+                    search_url = f"https://en.uptodown.com/android/search?q={search_query_escaped}"
                     self._log(f"Search URL: {search_url}")
+                    
                     r_search = self.scraper.get(search_url, timeout=self.timeout)
                     self._log(f"Search URL status: {r_search.status_code}")
                     
@@ -152,24 +157,48 @@ class UptodownSource:
                     else:
                         soup_search = BeautifulSoup(r_search.text, 'html.parser')
                         
-                        # חיפוש לפי CSS Selector רשמי
-                        first_item = soup_search.select_one('.item .name a, a.app-link')
-                        if first_item and first_item.has_attr('href'):
-                            app_url = first_item['href'].split('/download')[0]
-                            self._log(f"Found app via search selector: {app_url}")
-                        else:
-                            # גיבוי Regex
+                        # התיקון 2: מוודאים שלא ניפול למלכודת של לינק הפרסומת לחנות של Uptodown!
+                        for item in soup_search.select('.item .name a, a.app-link'):
+                            href = item.get('href', '')
+                            # מסננים החוצה את החנות שלהם
+                            if href and 'uptodown-android' not in href:
+                                app_url = href.split('/download')[0]
+                                self._log(f"Found app via search selector: {app_url}")
+                                break
+
+                        # גיבוי Regex אם אין תוצאות ב-Selector
+                        if not app_url:
                             candidates = []
                             for link in soup_search.find_all('a', href=True):
                                 m = re.search(r'(https://[a-z0-9-]+\.en\.uptodown\.com/android/?)$', link['href'])
                                 if m:
                                     base_url = m.group(1).rstrip('/')
+                                    # שוב - מסננים את אפליקציית החנות
                                     if 'uptodown-android' not in base_url and base_url not in candidates:
                                         candidates.append(base_url)
-                                        
+
+                            self._log(f"Found {len(candidates)} app candidate(s)")
                             if candidates:
-                                app_url = candidates[0]
-                                self._log(f"Found app via regex fallback: {app_url}")
+                                pkg_keyword = parts[-1]
+                                if pkg_keyword.lower() in ('android', 'app', 'music', 'mobile', 'lite', 'pro') and len(parts) > 1:
+                                    pkg_keyword = parts[-2]
+                                    
+                                candidates = sorted(candidates, key=lambda c: 0 if pkg_keyword.lower() in c.lower() else 1)
+                                
+                                for cand_url in candidates:
+                                    try:
+                                        cand_r = self.scraper.get(cand_url, timeout=self.timeout)
+                                        if re.search(r'\b' + re.escape(package_name) + r'\b', cand_r.text):
+                                            app_url = cand_url
+                                            break
+                                    except Exception:
+                                        pass
+                                        
+                                if not app_url:
+                                    for c in candidates:
+                                        if pkg_keyword.lower() in c.lower():
+                                            app_url = c
+                                            break
 
             if not app_url:
                 self._log("Could not determine app URL.")
@@ -192,7 +221,7 @@ class UptodownSource:
             default_file_id = name_el.get('data-file-id')
             target_file_id = default_file_id
 
-            # בדיקת XAPK
+            # בדיקת XAPK והעדפת APK טהור
             format_el = soup_dl.select_one('span.format')
             file_format = format_el.get_text(strip=True).upper() if format_el else "APK"
 
@@ -271,7 +300,9 @@ class UptodownSource:
                 self._log("CRITICAL: Could not extract token URL.")
                 return None, None
 
-            # --- טריק הקסם: נוודא תמיד שהכתובת מסתיימת ב-.apk כדי ש-run.py יוריד אותה ללא שגיאות 404 ---
+            # -------------------------------------------------------------
+            # טריק הקסם: נוודא תמיד שהכתובת מסתיימת ב-.apk כדי למנוע 404 בהורדה!
+            # -------------------------------------------------------------
             if not download_url.endswith('.apk'):
                 download_url = f"{download_url.rstrip('/')}/app.apk"
                 
@@ -280,7 +311,6 @@ class UptodownSource:
             self._log(f"Final version: {version_name}")
             self._log(f"Final URL (Handing off directly to run.py!): {download_url}")
             
-            # אין יותר צורך לעקוב אחרי ה-Redirect! הפונקציה מחזירה את הלינק המלא ו-run.py עושה את השאר.
             return download_url, version_name
 
         except Exception as e:
