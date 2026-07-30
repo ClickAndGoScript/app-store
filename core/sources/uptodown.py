@@ -1,5 +1,6 @@
 import re
 import json
+import requests
 from bs4 import BeautifulSoup
 import cloudscraper
 
@@ -16,6 +17,37 @@ class UptodownSource:
             "Accept-Language": "en-US,en;q=0.9",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         })
+        
+        # הפעלת פאטצ' ההורדה מיד עם טעינת המחלקה
+        self._patch_requests()
+
+    def _patch_requests(self):
+        """
+        Monkey-patch requests so the main run.py script will automatically
+        use our authenticated cloudscraper session when downloading from Uptodown.
+        """
+        if hasattr(requests, '_uptodown_patched'):
+            return
+            
+        original_get = requests.get
+        original_session_get = requests.Session.get
+        
+        def custom_get(url, *args, **kwargs):
+            if isinstance(url, str) and 'uptodown.com' in url:
+                self._log("Intercepted direct download request via monkey-patch!")
+                return self.scraper.get(url, *args, **kwargs)
+            return original_get(url, *args, **kwargs)
+            
+        def custom_session_get(session, url, *args, **kwargs):
+            if isinstance(url, str) and 'uptodown.com' in url:
+                self._log("Intercepted Session download request via monkey-patch!")
+                return self.scraper.get(url, *args, **kwargs)
+            return original_session_get(session, url, *args, **kwargs)
+
+        # מחליפים את הפונקציות המקוריות באלה שלנו
+        requests.get = custom_get
+        requests.Session.get = custom_session_get
+        requests._uptodown_patched = True
 
     def _log(self, *args, **kwargs):
         if self.debug:
@@ -150,7 +182,7 @@ class UptodownSource:
                         soup_search = BeautifulSoup(r_search.text, 'html.parser')
                         candidates = []
                         
-                        # 1. Extract from standard <a> tags (ignoring query parameters and extra sub-paths)
+                        # 1. Extract from standard <a> tags
                         for link in soup_search.find_all('a', href=True):
                             href = link.get('href', '')
                             m = re.search(r'(https://[a-z0-9-]+\.en\.uptodown\.com/android)', href)
@@ -159,7 +191,7 @@ class UptodownSource:
                                 if 'uptodown-android' not in base_url and base_url not in candidates:
                                     candidates.append(base_url)
 
-                        # 2. Fallback: Scan raw HTML/JSON text if results are dynamically rendered (Vue/React)
+                        # 2. Fallback: Scan raw HTML/JSON text
                         if not candidates:
                             self._log("No candidates found in <a> tags, scanning raw HTML/JSON...")
                             text_clean = r_search.text.replace('\\/', '/')
@@ -219,13 +251,12 @@ class UptodownSource:
             default_file_id = name_el.get('data-file-id')
             target_file_id = default_file_id
 
-            # מנגנון אלגוריתמי משופר: בודק *תמיד* את תפריט ה-Variants כדי להעדיף APK טהור על פני XAPK
+            # מנגנון אלגוריתמי משופר: בודק *תמיד* את תפריט ה-Variants
             variants_btn = soup_dl.select_one('button.variants')
             if variants_btn:
                 self._log("Variants button found. Searching for a pure APK variant...")
                 data_version = variants_btn.get('data-version')
                 
-                # חילוץ מזהה האפליקציה (data-code) ב-Uptodown
                 data_code = None
                 data_code_match = re.search(r'data-code="(\d+)"', r_dl.text)
                 if data_code_match:
@@ -256,14 +287,12 @@ class UptodownSource:
                                 curr = el
                                 found_format = None
                                 
-                                # סורק את עץ ה-HTML כלפי מעלה כדי למצוא תגיות שמעידות על הפורמט של השורה
                                 while curr and curr.name not in ['body', 'html']:
                                     text = curr.get_text(separator=" ", strip=True).upper()
                                     has_apk = bool(re.search(r'\bAPK\b', text))
                                     has_xapk = bool(re.search(r'\bXAPK\b', text))
                                     
                                     if has_apk and has_xapk:
-                                        # הגענו לאלמנט שמכיל מספר שורות (גם APK וגם XAPK), אז נעצור ולא נמשיך לעלות
                                         break
                                     elif has_xapk:
                                         found_format = "XAPK"
@@ -331,30 +360,11 @@ class UptodownSource:
     def get_download_url(self, initial_url):
         self._log(f"get_download_url({initial_url})")
         
+        # אנחנו מחזירים פה את הכתובת רגיל ל-run.py, 
+        # ה-patch שעשינו ל-requests כבר יתפוס את ההורדה בעצמו ויעביר אותה דרך cloudscraper
         if initial_url.startswith("uptodown_direct:"):
-            # מחלצים את כתובת הטוקן המקורית
-            token_url = initial_url.split("uptodown_direct:", 1)[1]
+            return initial_url.split("uptodown_direct:", 1)[1]
             
-            self._log(f"Resolving redirect for token URL using scraper session...")
-            try:
-                # הוספת Referer עוזרת לעקוף חסימות Hotlink
-                self.scraper.headers.update({"Referer": "https://en.uptodown.com/"})
-                
-                # אנחנו משתמשים ב-stream=True כדי לא להוריד את הקובץ לזיכרון פה,
-                # אלא רק כדי לעקוב אחרי ה-302 Redirect ולקבל את כתובת ה-CDN הסופית.
-                r = self.scraper.get(token_url, stream=True, allow_redirects=True, timeout=self.timeout)
-                
-                final_cdn_url = r.url
-                r.close() # חובה לסגור את החיבור
-                
-                self._log(f"Resolved CDN URL: {final_cdn_url}")
-                return final_cdn_url
-                
-            except Exception as e:
-                self._log(f"Failed to resolve CDN URL, falling back to token URL: {e}")
-                return token_url
-
-        # (גיבוי למקרה של Fallback - למרות שזה לא מנוצל בפועל לפי הלוגים שלך)
         package_name = initial_url.split("fallback:", 1)[1] if "fallback:" in initial_url else initial_url
         url, _ = self._get_uptodown_app(package_name)
         return url
