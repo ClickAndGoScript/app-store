@@ -39,9 +39,14 @@ class UptodownSource:
             return original_get(url, *args, **kwargs)
             
         def custom_session_get(session, url, *args, **kwargs):
+            # מניעת לולאה אינסופית: אם cloudscraper בעצמו מבצע את הבקשה, תן לו להמשיך רגיל!
+            if session is self.scraper:
+                return original_session_get(session, url, *args, **kwargs)
+                
             if isinstance(url, str) and 'uptodown.com' in url:
                 self._log("Intercepted Session download request via monkey-patch!")
                 return self.scraper.get(url, *args, **kwargs)
+                
             return original_session_get(session, url, *args, **kwargs)
 
         # מחליפים את הפונקציות המקוריות באלה שלנו
@@ -359,9 +364,6 @@ class UptodownSource:
 
     def get_download_url(self, initial_url):
         self._log(f"get_download_url({initial_url})")
-        
-        # אנחנו מחזירים פה את הכתובת רגיל ל-run.py, 
-        # ה-patch שעשינו ל-requests כבר יתפוס את ההורדה בעצמו ויעביר אותה דרך cloudscraper
         if initial_url.startswith("uptodown_direct:"):
             return initial_url.split("uptodown_direct:", 1)[1]
             
