@@ -23,9 +23,10 @@ class UptodownSource:
         self.proxy_server = None
         self.proxy_thread = None
         self.proxy_port = None
+        self.last_pre_download_url = 'https://en.uptodown.com/'
 
     def _start_proxy(self):
-        """מקים שרת פרוקסי מקומי שיזרים את הקובץ ל-run.py במקום ש-run.py יוריד בעצמו"""
+        """מקים שרת פרוקסי מקומי חסין-תקלות"""
         if self.proxy_server:
             return
             
@@ -33,8 +34,15 @@ class UptodownSource:
         
         class ProxyHandler(BaseHTTPRequestHandler):
             def log_message(self, format, *args):
-                pass # השתקת לוגים של השרת המקומי כדי לא להציף את המסך
+                pass # השתקת לוגים של השרת המקומי
                 
+            def do_HEAD(req_self):
+                # מזייפים תשובת 200 לבקשות HEAD כדי שסקריפט ההורדה לא "ישרוף" את הטוקן החד-פעמי של Uptodown!
+                req_self.send_response(200)
+                req_self.send_header('Content-Type', 'application/vnd.android.package-archive')
+                req_self.send_header('Accept-Ranges', 'none')
+                req_self.end_headers()
+
             def do_GET(req_self):
                 parsed = urllib.parse.urlparse(req_self.path)
                 qs = urllib.parse.parse_qs(parsed.query)
@@ -45,8 +53,9 @@ class UptodownSource:
                     return
                     
                 try:
-                    # השרת שלנו פונה ל-Uptodown עם זהות מלאה (Cookies + User Agent)
-                    headers = {"Referer": "https://en.uptodown.com/"}
+                    # השרת שלנו פונה ל-Uptodown עם ה-Referer המדויק שממנו חולץ הטוקן (הכרחי למניעת 404!)
+                    headers = {"Referer": outer_self.last_pre_download_url}
+                    
                     with outer_self.scraper.get(target_url, stream=True, headers=headers, timeout=120) as r:
                         req_self.send_response(r.status_code)
                         for k, v in r.headers.items():
@@ -54,12 +63,25 @@ class UptodownSource:
                                 req_self.send_header(k, v)
                         req_self.end_headers()
                         
+                        if r.status_code >= 400:
+                            outer_self._log(f"Proxy received HTTP {r.status_code} from Uptodown!")
+                            return
+                            
                         # הזרמה חיה של האפליקציה למוריד
                         for chunk in r.iter_content(chunk_size=8192):
                             if chunk:
                                 req_self.wfile.write(chunk)
+                                
+                except BrokenPipeError:
+                    pass # Client disconnected early (e.g. progress bar closed)
+                except ConnectionResetError:
+                    pass
                 except Exception as e:
-                    outer_self._log(f"Proxy stream disconnected or error: {e}")
+                    import errno
+                    if hasattr(e, 'errno') and e.errno in (errno.EPIPE, errno.ECONNRESET):
+                        pass
+                    else:
+                        outer_self._log(f"Proxy stream error: {e}")
 
         # פותח שרת מקומי ברקע על פורט פנוי אקראי
         self.proxy_server = HTTPServer(('127.0.0.1', 0), ProxyHandler)
@@ -106,22 +128,6 @@ class UptodownSource:
                 return match.group(1)
         return None
 
-    def _extract_version_from_url(self, url):
-        match = re.search(r'(\d+(?:\.\d+)+)', url)
-        return match.group(1) if match else None
-
-    def _extract_version_from_headers(self, url):
-        try:
-            head = self.scraper.head(url, allow_redirects=True, timeout=10)
-            cd = head.headers.get('Content-Disposition', '')
-            match = re.search(r'filename="?([^"]+)"?', cd)
-            if match:
-                filename = match.group(1)
-                return self._extract_version_from_url(filename)
-        except:
-            pass
-        return None
-
     def _get_real_version(self, soup, download_url):
         ver = self._extract_version_from_ld_json(soup)
         if ver:
@@ -137,12 +143,6 @@ class UptodownSource:
         if ver:
             self._log(f"Version from title: {ver}")
             return ver
-
-        if download_url:
-            ver = self._extract_version_from_headers(download_url)
-            if ver:
-                self._log(f"Version from Content-Disposition: {ver}")
-                return ver
 
         self._log("Searching raw text for version (fallback)...")
         text = soup.get_text()
@@ -186,7 +186,7 @@ class UptodownSource:
                             else:
                                 self._log("URL works but package name not found. Falling back to search.")
                         elif r_dir.status_code in (403, 429):
-                            self._log("Cloudflare blocked the direct URL request (probably rate-limited).")
+                            self._log("Cloudflare blocked the direct URL request.")
                     except Exception as e:
                         self._log(f"Direct URL error: {e}")
                 
@@ -195,13 +195,11 @@ class UptodownSource:
                     search_query = " ".join(query_parts) if query_parts else package_name.replace('.', ' ')
                     search_query_escaped = search_query.replace(' ', '+')
                     
-                    # הנה התיקון הקריטי: הכתובת התקינה ללא רווחים!
                     search_url = f"https://en.uptodown.com/android/search/{search_query_escaped}"
                     self._log(f"Search URL: {search_url}")
                     
                     r_search = self.scraper.get(search_url, timeout=self.timeout)
                     
-                    # Handle auto-redirect with robust regex
                     m_redirect = re.search(r'^(https://[a-z0-9-]+\.en\.uptodown\.com/android)', r_search.url)
                     if r_search.url != search_url and m_redirect:
                         self._log("Search auto-redirected directly to the app page.")
@@ -219,7 +217,6 @@ class UptodownSource:
                                     candidates.append(base_url)
 
                         if not candidates:
-                            self._log("No candidates found in <a> tags, scanning raw HTML/JSON...")
                             text_clean = r_search.text.replace('\\/', '/')
                             for match in re.findall(r'(https://[a-z0-9-]+\.en\.uptodown\.com/android)', text_clean):
                                 if 'uptodown-android' not in match and match not in candidates:
@@ -234,34 +231,26 @@ class UptodownSource:
                             candidates = sorted(candidates, key=lambda c: 0 if pkg_keyword.lower() in c.lower() else 1)
                             
                             for cand_url in candidates:
-                                self._log(f"Verifying candidate: {cand_url}")
                                 try:
                                     cand_r = self.scraper.get(cand_url, timeout=self.timeout)
                                     if re.search(r'\b' + re.escape(package_name) + r'\b', cand_r.text):
                                         app_url = cand_url
                                         break
-                                except Exception as e:
-                                    self._log(f"Error checking candidate {cand_url}: {e}")
+                                except Exception:
+                                    pass
                                     
                             if not app_url:
-                                self._log("Warning: Could not strictly verify package name. Attempting URL match fallback...")
                                 for c in candidates:
                                     if pkg_keyword.lower() in c.lower():
                                         app_url = c
-                                        self._log(f"Fell back to candidate based on URL match: {app_url}")
                                         break
 
                             if not app_url:
-                                self._log("No valid matching app found among candidates. Aborting.")
                                 return None, None
-                            
-                            self._log(f"Selected app URL: {app_url}")
                         else:
-                            self._log("No app link found.")
                             return None, None
 
             if not app_url:
-                self._log("App not found.")
                 return None, None
 
             download_page = f"{app_url}/download"
@@ -271,78 +260,64 @@ class UptodownSource:
 
             name_el = soup_dl.select_one('#detail-app-name')
             if not name_el:
-                self._log("Could not find element #detail-app-name")
                 return None, None
             
-            default_file_id = name_el.get('data-file-id')
-            target_file_id = default_file_id
+            target_file_id = name_el.get('data-file-id')
 
             variants_btn = soup_dl.select_one('button.variants')
             if variants_btn:
-                self._log("Variants button found. Searching for a pure APK variant...")
                 data_version = variants_btn.get('data-version')
-                
                 data_code = None
+                
                 data_code_match = re.search(r'data-code="(\d+)"', r_dl.text)
                 if data_code_match:
                     data_code = data_code_match.group(1)
                 else:
-                    data_code_match = re.search(r'data-code\s*:\s*[\'\"](\d+)[\'\"]', r_dl.text)
-                    if data_code_match:
-                        data_code = data_code_match.group(1)
-                    else:
-                        code_el = soup_dl.find(attrs={"data-code": True})
-                        if code_el:
-                            data_code = code_el.get("data-code")
+                    code_el = soup_dl.find(attrs={"data-code": True})
+                    if code_el:
+                        data_code = code_el.get("data-code")
 
                 if data_code and data_version:
                     domain = app_url.split('//')[1].split('/')[0]
                     variants_url = f"https://{domain}/app/{data_code}/version/{data_version}/files"
-                    self._log(f"Fetching variants from: {variants_url}")
                     
                     try:
                         r_var = self.scraper.get(variants_url, timeout=self.timeout)
                         if r_var.status_code == 200:
                             var_json = r_var.json()
-                            var_html = var_json.get('content', '')
-                            var_soup = BeautifulSoup(var_html, 'html.parser')
+                            var_soup = BeautifulSoup(var_json.get('content', ''), 'html.parser')
                             
-                            file_id_elements = var_soup.find_all(attrs={"data-file-id": True})
-                            for el in file_id_elements:
+                            for el in var_soup.find_all(attrs={"data-file-id": True}):
                                 curr = el
                                 found_format = None
-                                
                                 while curr and curr.name not in ['body', 'html']:
                                     text = curr.get_text(separator=" ", strip=True).upper()
-                                    has_apk = bool(re.search(r'\bAPK\b', text))
-                                    has_xapk = bool(re.search(r'\bXAPK\b', text))
-                                    
-                                    if has_apk and has_xapk:
+                                    if bool(re.search(r'\bAPK\b', text)) and bool(re.search(r'\bXAPK\b', text)):
                                         break
-                                    elif has_xapk:
+                                    elif bool(re.search(r'\bXAPK\b', text)):
                                         found_format = "XAPK"
                                         break
-                                    elif has_apk:
+                                    elif bool(re.search(r'\bAPK\b', text)):
                                         found_format = "APK"
                                         break
-                                        
                                     curr = curr.parent
                                     
                                 if found_format == "APK":
                                     target_file_id = el.get('data-file-id')
-                                    self._log(f"Found pure APK variant file ID: {target_file_id}")
                                     break
-                    except Exception as e:
-                        self._log(f"Failed to fetch or parse variants: {e}")
+                    except Exception:
+                        pass
 
             if not target_file_id:
-                self._log("No valid file ID found.")
                 return None, None
                 
             self._log(f"Final selected file ID: {target_file_id}")
 
             pre_download_url = f"{download_page}/{target_file_id}-x"
+            # שמירת ה-Referer המדויק לשימוש הפרוקסי
+            self.last_pre_download_url = pre_download_url
             self.scraper.headers.update({'Referer': download_page})
+            
             r_pre = self.scraper.get(pre_download_url, timeout=self.timeout)
             soup_pre = BeautifulSoup(r_pre.text, 'html.parser')
 
@@ -353,7 +328,6 @@ class UptodownSource:
                 if download_button and download_button.has_attr('href'):
                      final_token = download_button.get('href')
                 else:
-                    self._log("Failed to get download token.")
                     return None, None
                     
             if final_token.startswith('http'):
