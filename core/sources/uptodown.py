@@ -1,9 +1,6 @@
 import re
 import json
 import cloudscraper
-import threading
-import urllib.parse
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from bs4 import BeautifulSoup
 
 class UptodownSource:
@@ -19,76 +16,6 @@ class UptodownSource:
             "Accept-Language": "en-US,en;q=0.9",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         })
-        
-        self.proxy_server = None
-        self.proxy_thread = None
-        self.proxy_port = None
-        self.last_pre_download_url = 'https://en.uptodown.com/'
-
-    def _start_proxy(self):
-        """מקים שרת פרוקסי מקומי חסין-תקלות"""
-        if self.proxy_server:
-            return
-            
-        outer_self = self
-        
-        class ProxyHandler(BaseHTTPRequestHandler):
-            def log_message(self, format, *args):
-                pass # השתקת לוגים של השרת המקומי
-                
-            def do_HEAD(req_self):
-                # מזייפים תשובת 200 לבקשות HEAD כדי שסקריפט ההורדה לא "ישרוף" את הטוקן החד-פעמי של Uptodown!
-                req_self.send_response(200)
-                req_self.send_header('Content-Type', 'application/vnd.android.package-archive')
-                req_self.send_header('Accept-Ranges', 'none')
-                req_self.end_headers()
-
-            def do_GET(req_self):
-                parsed = urllib.parse.urlparse(req_self.path)
-                qs = urllib.parse.parse_qs(parsed.query)
-                target_url = qs.get('url', [None])[0]
-                
-                if not target_url:
-                    req_self.send_error(400, "Missing url parameter")
-                    return
-                    
-                try:
-                    # השרת שלנו פונה ל-Uptodown עם ה-Referer המדויק שממנו חולץ הטוקן (הכרחי למניעת 404!)
-                    headers = {"Referer": outer_self.last_pre_download_url}
-                    
-                    with outer_self.scraper.get(target_url, stream=True, headers=headers, timeout=120) as r:
-                        req_self.send_response(r.status_code)
-                        for k, v in r.headers.items():
-                            if k.lower() not in ['transfer-encoding', 'content-encoding', 'connection', 'keep-alive']:
-                                req_self.send_header(k, v)
-                        req_self.end_headers()
-                        
-                        if r.status_code >= 400:
-                            outer_self._log(f"Proxy received HTTP {r.status_code} from Uptodown!")
-                            return
-                            
-                        # הזרמה חיה של האפליקציה למוריד
-                        for chunk in r.iter_content(chunk_size=8192):
-                            if chunk:
-                                req_self.wfile.write(chunk)
-                                
-                except BrokenPipeError:
-                    pass # Client disconnected early (e.g. progress bar closed)
-                except ConnectionResetError:
-                    pass
-                except Exception as e:
-                    import errno
-                    if hasattr(e, 'errno') and e.errno in (errno.EPIPE, errno.ECONNRESET):
-                        pass
-                    else:
-                        outer_self._log(f"Proxy stream error: {e}")
-
-        # פותח שרת מקומי ברקע על פורט פנוי אקראי
-        self.proxy_server = HTTPServer(('127.0.0.1', 0), ProxyHandler)
-        self.proxy_port = self.proxy_server.server_port
-        self.proxy_thread = threading.Thread(target=self.proxy_server.serve_forever, daemon=True)
-        self.proxy_thread.start()
-        self._log(f"Started local proxy server on port {self.proxy_port}")
 
     def _log(self, *args, **kwargs):
         if self.debug:
@@ -128,6 +55,22 @@ class UptodownSource:
                 return match.group(1)
         return None
 
+    def _extract_version_from_url(self, url):
+        match = re.search(r'(\d+(?:\.\d+)+)', url)
+        return match.group(1) if match else None
+
+    def _extract_version_from_headers(self, url):
+        try:
+            head = self.scraper.head(url, allow_redirects=True, timeout=10)
+            cd = head.headers.get('Content-Disposition', '')
+            match = re.search(r'filename="?([^"]+)"?', cd)
+            if match:
+                filename = match.group(1)
+                return self._extract_version_from_url(filename)
+        except:
+            pass
+        return None
+
     def _get_real_version(self, soup, download_url):
         ver = self._extract_version_from_ld_json(soup)
         if ver:
@@ -143,6 +86,12 @@ class UptodownSource:
         if ver:
             self._log(f"Version from title: {ver}")
             return ver
+
+        if download_url:
+            ver = self._extract_version_from_headers(download_url)
+            if ver:
+                self._log(f"Version from Content-Disposition: {ver}")
+                return ver
 
         self._log("Searching raw text for version (fallback)...")
         text = soup.get_text()
@@ -177,18 +126,11 @@ class UptodownSource:
                     self._log(f"Trying direct URL guess: {direct_url}")
                     try:
                         r_dir = self.scraper.get(direct_url, timeout=self.timeout)
-                        self._log(f"Direct URL status: {r_dir.status_code}")
-                        
-                        if r_dir.status_code == 200:
-                            if 'detail-app-name' in r_dir.text or re.search(r'\b' + re.escape(package_name) + r'\b', r_dir.text):
-                                app_url = direct_url
-                                self._log("Direct URL guess successful.")
-                            else:
-                                self._log("URL works but package name not found. Falling back to search.")
-                        elif r_dir.status_code in (403, 429):
-                            self._log("Cloudflare blocked the direct URL request.")
-                    except Exception as e:
-                        self._log(f"Direct URL error: {e}")
+                        if r_dir.status_code == 200 and re.search(r'\b' + re.escape(package_name) + r'\b', r_dir.text):
+                            app_url = direct_url
+                            self._log("Direct URL guess successful.")
+                    except:
+                        pass
                 
                 # 2. גיבוי דרך מנוע החיפוש
                 if not app_url:
@@ -197,7 +139,6 @@ class UptodownSource:
                     
                     search_url = f"https://en.uptodown.com/android/search/{search_query_escaped}"
                     self._log(f"Search URL: {search_url}")
-                    
                     r_search = self.scraper.get(search_url, timeout=self.timeout)
                     
                     m_redirect = re.search(r'^(https://[a-z0-9-]+\.en\.uptodown\.com/android)', r_search.url)
@@ -313,11 +254,10 @@ class UptodownSource:
                 
             self._log(f"Final selected file ID: {target_file_id}")
 
-            pre_download_url = f"{download_page}/{target_file_id}-x"
-            # שמירת ה-Referer המדויק לשימוש הפרוקסי
-            self.last_pre_download_url = pre_download_url
-            self.scraper.headers.update({'Referer': download_page})
+            # התיקון הקריטי: הוסר ה-"-x" שיצר טוקנים מתים בשרת של Uptodown
+            pre_download_url = f"{download_page}/{target_file_id}"
             
+            self.scraper.headers.update({'Referer': download_page})
             r_pre = self.scraper.get(pre_download_url, timeout=self.timeout)
             soup_pre = BeautifulSoup(r_pre.text, 'html.parser')
 
@@ -344,8 +284,6 @@ class UptodownSource:
 
         except Exception as e:
             self._log(f"Error: {e}")
-            import traceback
-            traceback.print_exc()
             return None, None
 
     # ---------- Public interface ----------
@@ -367,10 +305,23 @@ class UptodownSource:
             target_url, _ = self._get_uptodown_app(package_name)
             
         if target_url:
-            self._start_proxy()
-            encoded_url = urllib.parse.quote(target_url, safe='')
-            proxy_url = f"http://127.0.0.1:{self.proxy_port}/?url={encoded_url}&file=app.apk"
-            self._log(f"Routing download through Local Proxy Server: {proxy_url}")
-            return proxy_url
-            
+            self._log("Resolving final CDN URL using scraper to bypass anti-bot...")
+            try:
+                self.scraper.headers.update({"Referer": "https://en.uptodown.com/"})
+                # אנחנו עוקבים פעם אחת אחרי ה-Redirect של Uptodown כדי לקבל את כתובת ה-CDN החופשית!
+                r = self.scraper.get(target_url, stream=True, allow_redirects=True, timeout=30)
+                final_cdn_url = r.url
+                r.close() # סוגרים את החיבור מיד, לא מורידים פה
+                
+                if r.status_code >= 400:
+                    self._log(f"Warning: Token resolution returned HTTP {r.status_code}")
+                    return target_url # במקרה חירום
+                    
+                self._log(f"Successfully resolved CDN URL: {final_cdn_url}")
+                return final_cdn_url # מחזירים את כתובת ה-CDN החופשית ל-run.py!
+                
+            except Exception as e:
+                self._log(f"Failed to resolve CDN URL: {e}")
+                return target_url
+                
         return None
