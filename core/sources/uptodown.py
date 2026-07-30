@@ -1,6 +1,7 @@
 import re
 import json
 import cloudscraper
+import urllib.parse
 from bs4 import BeautifulSoup
 
 class UptodownSource:
@@ -133,18 +134,19 @@ class UptodownSource:
                                 self._log("Direct URL guess successful.")
                             else:
                                 self._log("URL works but package name not found. Falling back to search.")
-                        elif r_dir.status_code in (403, 429):
-                            self._log(f"Cloudflare blocked the direct URL request (Status: {r_dir.status_code}).")
+                        elif r_dir.status_code in (403, 410, 429):
+                            self._log(f"Cloudflare/Uptodown blocked the direct URL request (Status: {r_dir.status_code}).")
                     except Exception as e:
                         self._log(f"Direct URL error: {e}")
                 
                 if not app_url:
                     search_query = " ".join(query_parts) if query_parts else package_name.replace('.', ' ')
-                    search_query_escaped = search_query.replace(' ', '+')
+                    search_query_escaped = urllib.parse.quote_plus(search_query) # שימוש בפונקציה בטוחה לקידוד רווחים
                     
                     search_url = f"https://en.uptodown.com/android/search/{search_query_escaped}"
                     self._log(f"Search URL: {search_url}")
                     r_search = self.scraper.get(search_url, timeout=self.timeout)
+                    self._log(f"Search URL status: {r_search.status_code}")
                     
                     m_redirect = re.search(r'^(https://[a-z0-9-]+\.en\.uptodown\.com/android)', r_search.url)
                     if r_search.url != search_url and m_redirect:
@@ -273,50 +275,40 @@ class UptodownSource:
                 r_dl = self.scraper.get(current_download_page, timeout=self.timeout)
                 soup_dl = BeautifulSoup(r_dl.text, 'html.parser')
 
-            # -------------------------------------------------------------
-            # השלב הקריטי: מעבר לעמוד ה--x (העמוד שמייצר את הלינק המלא האמיתי)
-            # -------------------------------------------------------------
-            # התיקון: מבטיחים שהכתובת תמיד תהיה בפורמט: app_url/download/ID-x
-            post_download_url = f"{app_url}/download/{target_file_id}-x"
-            self._log(f"Fetching post-download (-x) page: {post_download_url}")
+            # --- אנחנו מתעלמים מעמוד ה--x! שולפים את הטוקן ישירות מהעמוד הרשמי! ---
+            download_button = soup_dl.select_one('#detail-download-button')
+            final_token = download_button.get('data-url') if download_button else None
             
-            self.scraper.headers.update({'Referer': current_download_page})
-            r_post = self.scraper.get(post_download_url, timeout=self.timeout)
-            
-            if r_post.status_code != 200:
-                self._log(f"Failed to load post-download page (Status {r_post.status_code}).")
-                return None, None
-
-            # שולפים בעזרת Regex את הלינק המושלם מתוך העמוד
-            download_url = None
-            match = re.search(r'(https://dw\.uptodown\.(?:net|com)/dwn/[^\s"\'<>]+)', r_post.text)
-            
-            if match:
-                download_url = match.group(1).replace('\\/', '/')
-                self._log(f"Found COMPLETE token URL: {download_url}")
+            if not final_token:
+                if download_button and download_button.has_attr('href'):
+                     final_token = download_button.get('href')
+                else:
+                    self._log("CRITICAL: Failed to find download token or link in button!")
+                    return None, None
+                    
+            if final_token.startswith('http'):
+                download_url = final_token
+            elif final_token.startswith('/dwn/'):
+                download_url = f"https://dw.uptodown.com{final_token}"
             else:
-                self._log("Regex failed. Falling back to HTML parsing on -x page...")
-                soup_post = BeautifulSoup(r_post.text, 'html.parser')
-                btn = soup_post.select_one('#detail-download-button, a.post-download-link')
-                if btn:
-                    if btn.has_attr('href') and 'dw.uptodown' in btn['href']:
-                        download_url = btn['href']
-                    elif btn.has_attr('data-url'):
-                        token = btn['data-url'].strip('/')
-                        download_url = token if token.startswith('http') else f"https://dw.uptodown.net/dwn/{token}"
-                        
-            if not download_url:
-                self._log("CRITICAL: Could not extract final token URL.")
-                return None, None
+                final_token = final_token.strip('/')
+                download_url = f"https://dw.uptodown.com/dwn/{final_token}"
                 
             version_name = self._get_real_version(soup_dl, download_url)
+            self._log(f"Extracted initial token URL: {download_url}")
 
-            # --- פיענוח לינק ה-CDN הישיר ---
-            self._log("Resolving final CDN URL using scraper to bypass anti-bot...")
+            # --- פיענוח לינק ה-CDN הישיר (זה שנגמר ב-.apk כמו בדפדפן שלך) ---
+            self._log("Resolving final CDN URL (following redirect) to get the true .apk URL...")
             try:
-                # קריטי: השרת דורש שה-Referer הפעם יהיה עמוד ה--x
-                self.scraper.headers.update({"Referer": post_download_url})
+                # קריטי: השרת דורש שה-Referer יהיה עמוד ההורדה הנוכחי
+                self.scraper.headers.update({
+                    "Referer": current_download_page,
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "same-site"
+                })
                 
+                # חוסמים את ההורדה עצמה כדי ללכוד רק את ה-Redirect של Uptodown
                 r_final = self.scraper.get(download_url, allow_redirects=False, timeout=30)
                 status_code = r_final.status_code
                 self._log(f"Token resolution status: {status_code}")
@@ -324,12 +316,12 @@ class UptodownSource:
                 if status_code in (301, 302, 303, 307, 308):
                     final_cdn_url = r_final.headers.get('Location')
                     if final_cdn_url:
-                        self._log(f"Successfully resolved CDN URL: {final_cdn_url}")
+                        self._log(f"Successfully resolved CDN URL (Redirect to .net/.com): {final_cdn_url}")
                         download_url = final_cdn_url 
                 elif status_code == 200:
                     self._log("Warning: Token endpoint returned 200. It might be a direct stream.")
-                elif status_code in (403, 404):
-                    self._log(f"CRITICAL: Uptodown returned HTTP {status_code} for the FULL download token. IP might be blocked.")
+                elif status_code in (403, 404, 410):
+                    self._log(f"CRITICAL: Uptodown returned HTTP {status_code} for the download token. GitHub Actions IP might be banned.")
                     return None, None
                 else:
                     self._log(f"Warning: CDN resolution failed (Status: {status_code}).")
