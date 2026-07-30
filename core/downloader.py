@@ -156,8 +156,8 @@ def download_app(app_config: dict, output_filename: str = "latest.apk") -> tuple
     if not remote_version:
         raise DownloadError(f"[{app_name}] No results found on {source_name}.")
 
-    # --- מנגנון הוטפיקס חכם ---
-     version_overrides = app_config.get("version_overrides", {})
+    # --- מנגנון הוטפיקס וזיוף גרסאות ---
+    version_overrides = app_config.get("version_overrides", {})
     hotfixes = app_config.get("hotfixes", {})
 
     override_ver = version_overrides.get(remote_version)
@@ -169,7 +169,7 @@ def download_app(app_config: dict, output_filename: str = "latest.apk") -> tuple
         if suffix:
             remote_version = f"{remote_version}{suffix}"
             title = f"{title} (Hotfix {suffix})"
-    # --------------------------
+    # -----------------------------------
 
     print(f"[*] [{app_name}] Latest release: {title}")
     print(f"[*] [{app_name}] Remote version: {remote_version}")
