@@ -11,7 +11,7 @@ class UptodownSource:
         self.debug = debug
 
         self.scraper = cloudscraper.create_scraper(
-            browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
+            browser={'browser': 'firefox', 'platform': 'windows', 'desktop': True}
         )
         self.scraper.headers.update({
             "Accept-Language": "en-US,en;q=0.9",
@@ -120,7 +120,7 @@ class UptodownSource:
                 parts = package_name.split('.')
                 query_parts = [p for p in parts if p.lower() not in ('com', 'org', 'net', 'co', 'io', 'gov', 'android', 'app', 'mobile')]
                 
-                # 1. ניחוש URL ישיר
+                # 1. ניחוש חכם של כתובת
                 if query_parts:
                     guess_subdomain = query_parts[0].lower()
                     direct_url = f"https://{guess_subdomain}.en.uptodown.com/android"
@@ -136,51 +136,40 @@ class UptodownSource:
                     except Exception as e:
                         self._log(f"Direct URL error: {e}")
                 
-                # 2. גיבוי דרך חיפוש
+                # 2. גיבוי דרך חיפוש (תוקן לשימוש ב- ?q= )
                 if not app_url:
-                    search_query = " ".join(query_parts) if query_parts else package_name.replace('.', ' ')
-                    search_query_escaped = urllib.parse.quote_plus(search_query)
+                    search_query_escaped = urllib.parse.quote_plus(package_name)
+                    search_url = f"https://en.uptodown.com/android/search?q={search_query_escaped}"
                     
-                    search_url = f"https://en.uptodown.com/android/search/{search_query_escaped}"
                     self._log(f"Search URL: {search_url}")
                     r_search = self.scraper.get(search_url, timeout=self.timeout)
+                    self._log(f"Search URL status: {r_search.status_code}")
                     
                     m_redirect = re.search(r'^(https://[a-z0-9-]+\.en\.uptodown\.com/android)', r_search.url)
                     if r_search.url != search_url and m_redirect:
                         app_url = m_redirect.group(1)
+                        self._log(f"Search auto-redirected directly to: {app_url}")
                     else:
                         soup_search = BeautifulSoup(r_search.text, 'html.parser')
-                        candidates = []
                         
-                        for link in soup_search.find_all('a', href=True):
-                            href = link.get('href', '')
-                            m = re.search(r'(https://[a-z0-9-]+\.en\.uptodown\.com/android)', href)
-                            if m:
-                                base_url = m.group(1)
-                                if 'uptodown-android' not in base_url and base_url not in candidates:
-                                    candidates.append(base_url)
-
-                        if candidates:
-                            pkg_keyword = parts[-1]
-                            if pkg_keyword.lower() in ('android', 'app', 'music', 'mobile', 'lite', 'pro') and len(parts) > 1:
-                                pkg_keyword = parts[-2]
-                                
-                            candidates = sorted(candidates, key=lambda c: 0 if pkg_keyword.lower() in c.lower() else 1)
-                            
-                            for cand_url in candidates:
-                                try:
-                                    cand_r = self.scraper.get(cand_url, timeout=self.timeout)
-                                    if re.search(r'\b' + re.escape(package_name) + r'\b', cand_r.text):
-                                        app_url = cand_url
-                                        break
-                                except:
-                                    pass
-                                    
-                            if not app_url:
-                                for c in candidates:
-                                    if pkg_keyword.lower() in c.lower():
-                                        app_url = c
-                                        break
+                        # חיפוש לפי CSS Selector רשמי
+                        first_item = soup_search.select_one('.item .name a, a.app-link')
+                        if first_item and first_item.has_attr('href'):
+                            app_url = first_item['href'].split('/download')[0]
+                            self._log(f"Found app via search selector: {app_url}")
+                        else:
+                            # גיבוי Regex
+                            candidates = []
+                            for link in soup_search.find_all('a', href=True):
+                                m = re.search(r'(https://[a-z0-9-]+\.en\.uptodown\.com/android/?)$', link['href'])
+                                if m:
+                                    base_url = m.group(1).rstrip('/')
+                                    if 'uptodown-android' not in base_url and base_url not in candidates:
+                                        candidates.append(base_url)
+                                        
+                            if candidates:
+                                app_url = candidates[0]
+                                self._log(f"Found app via regex fallback: {app_url}")
 
             if not app_url:
                 self._log("Could not determine app URL.")
@@ -192,7 +181,7 @@ class UptodownSource:
             r_dl = self.scraper.get(download_page, timeout=self.timeout)
             
             if r_dl.status_code != 200:
-                self._log(f"CRITICAL: Failed to load download page! Status: {r_dl.status_code}")
+                self._log(f"CRITICAL: Failed to load download page! Status {r_dl.status_code}")
                 return None, None
 
             soup_dl = BeautifulSoup(r_dl.text, 'html.parser')
@@ -202,8 +191,8 @@ class UptodownSource:
             
             default_file_id = name_el.get('data-file-id')
             target_file_id = default_file_id
-            
-            # בדיקת פורמט (APK מול XAPK)
+
+            # בדיקת XAPK
             format_el = soup_dl.select_one('span.format')
             file_format = format_el.get_text(strip=True).upper() if format_el else "APK"
 
@@ -230,62 +219,68 @@ class UptodownSource:
                                         report_el = variant.select_one('.v-report')
                                         if report_el:
                                             target_file_id = report_el.get('data-file-id')
-                                            self._log(f"Found pure APK variant on Uptodown (ID: {target_file_id})")
+                                            self._log(f"Found pure APK variant (ID: {target_file_id})")
                                             break
-                        except Exception as e:
-                            self._log(f"Failed parsing variants: {e}")
+                        except Exception:
+                            pass
 
             if not target_file_id:
-                self._log("Could not find a valid file ID.")
                 return None, None
                 
             self._log(f"Final selected file ID: {target_file_id}")
 
-            # מעבר לעמוד ה--x לקבלת הטוקן
-            pre_download_url = f"{download_page.rstrip('/')}/{target_file_id}-x"
-            self._log(f"Fetching post-download (-x) page: {pre_download_url}")
+            current_download_page = download_page
+            if target_file_id != default_file_id:
+                current_download_page = f"{app_url}/download/{target_file_id}"
+                self._log(f"Fetching specific variant download page: {current_download_page}")
+                r_dl = self.scraper.get(current_download_page, timeout=self.timeout)
+                soup_dl = BeautifulSoup(r_dl.text, 'html.parser')
+
+            # מעבר לעמוד ה--x לשליפת הטוקן הסופי
+            post_download_url = f"{app_url}/download/{target_file_id}-x"
+            self._log(f"Fetching post-download (-x) page: {post_download_url}")
             
-            self.scraper.headers.update({'Referer': download_page})
-            r_pre = self.scraper.get(pre_download_url, timeout=self.timeout)
+            self.scraper.headers.update({'Referer': current_download_page})
+            r_post = self.scraper.get(post_download_url, timeout=self.timeout)
             
-            if r_pre.status_code != 200:
-                self._log(f"Failed to load post-download page (Status {r_pre.status_code}).")
+            if r_post.status_code != 200:
+                self._log(f"Failed to load post-download page (Status {r_post.status_code}).")
                 return None, None
 
-            soup_pre = BeautifulSoup(r_pre.text, 'html.parser')
-            download_button = soup_pre.select_one('#detail-download-button')
-            final_token = download_button.get('data-url') if download_button else None
+            download_url = None
+            match = re.search(r'(https://dw\.uptodown\.(?:net|com)/dwn/[^\s"\'<>]+)', r_post.text)
             
-            if not final_token:
-                if download_button and download_button.has_attr('href'):
-                     final_token = download_button.get('href')
-                else:
-                    self._log("CRITICAL: Failed to find download token or link in button!")
-                    return None, None
-            
-            # -------------------------------------------------------------
-            # טריק הקסם (Magic Hack): בניית הלינק והוספת .apk בסוף למניעת 404!
-            # -------------------------------------------------------------
-            final_token = final_token.strip('/')
-            
-            # מוודאים שאנחנו לוקחים רק את הטוקן הנקי בלי כפילויות של dwn/
-            if final_token.startswith('dwn/'):
-                final_token = final_token[4:]
-            elif final_token.startswith('http'):
-                # אם הוא כבר HTTP מלא, נוודא רק שיש לו סיומת
-                if not final_token.endswith('.apk'):
-                    final_token = f"{final_token.rstrip('/')}/app.apk"
-                download_url = final_token
-            
-            if not final_token.startswith('http'):
-                download_url = f"https://dw.uptodown.com/dwn/{final_token}/app.apk"
-            
-            # -------------------------------------------------------------
+            if match:
+                download_url = match.group(1).replace('\\/', '/')
+            else:
+                soup_post = BeautifulSoup(r_post.text, 'html.parser')
+                btn = soup_post.select_one('#detail-download-button, a.post-download-link')
+                if btn:
+                    final_token = btn.get('data-url') or btn.get('href')
+                    if final_token:
+                        final_token = final_token.strip('/')
+                        if final_token.startswith('dwn/'):
+                            final_token = final_token[4:]
+                            
+                        if final_token.startswith('http'):
+                            download_url = final_token
+                        else:
+                            download_url = f"https://dw.uptodown.com/dwn/{final_token}"
 
+            if not download_url:
+                self._log("CRITICAL: Could not extract token URL.")
+                return None, None
+
+            # --- טריק הקסם: נוודא תמיד שהכתובת מסתיימת ב-.apk כדי ש-run.py יוריד אותה ללא שגיאות 404 ---
+            if not download_url.endswith('.apk'):
+                download_url = f"{download_url.rstrip('/')}/app.apk"
+                
             version_name = self._get_real_version(soup_dl, download_url)
 
             self._log(f"Final version: {version_name}")
-            self._log(f"Final URL (Ready for download): {download_url}")
+            self._log(f"Final URL (Handing off directly to run.py!): {download_url}")
+            
+            # אין יותר צורך לעקוב אחרי ה-Redirect! הפונקציה מחזירה את הלינק המלא ו-run.py עושה את השאר.
             return download_url, version_name
 
         except Exception as e:
@@ -304,7 +299,6 @@ class UptodownSource:
         self._log(f"get_download_url({initial_url})")
         
         if initial_url.startswith("uptodown_direct:"):
-            # מחזיר מיד את הלינק הישיר שבנינו
             return initial_url.split("uptodown_direct:", 1)[1]
             
         package_name = initial_url.split("fallback:", 1)[1] if "fallback:" in initial_url else initial_url
