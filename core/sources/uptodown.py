@@ -126,11 +126,18 @@ class UptodownSource:
                     self._log(f"Trying direct URL guess: {direct_url}")
                     try:
                         r_dir = self.scraper.get(direct_url, timeout=self.timeout)
-                        if r_dir.status_code == 200 and re.search(r'\b' + re.escape(package_name) + r'\b', r_dir.text):
-                            app_url = direct_url
-                            self._log("Direct URL guess successful.")
-                    except:
-                        pass
+                        self._log(f"Direct URL status: {r_dir.status_code}")
+                        
+                        if r_dir.status_code == 200:
+                            if 'detail-app-name' in r_dir.text or re.search(r'\b' + re.escape(package_name) + r'\b', r_dir.text):
+                                app_url = direct_url
+                                self._log("Direct URL guess successful.")
+                            else:
+                                self._log("URL works but package name not found. Falling back to search.")
+                        elif r_dir.status_code in (403, 429):
+                            self._log("Cloudflare blocked the direct URL request.")
+                    except Exception as e:
+                        self._log(f"Direct URL error: {e}")
                 
                 # 2. גיבוי דרך מנוע החיפוש
                 if not app_url:
@@ -254,10 +261,10 @@ class UptodownSource:
                 
             self._log(f"Final selected file ID: {target_file_id}")
 
-            # התיקון הקריטי: הוסר ה-"-x" שיצר טוקנים מתים בשרת של Uptodown
-            pre_download_url = f"{download_page}/{target_file_id}"
-            
+            # ה-Referer לעמוד יצירת הטוקן חייב להיות עמוד ההורדה הראשי
+            pre_download_url = f"{download_page}/{target_file_id}-x"
             self.scraper.headers.update({'Referer': download_page})
+            
             r_pre = self.scraper.get(pre_download_url, timeout=self.timeout)
             soup_pre = BeautifulSoup(r_pre.text, 'html.parser')
 
@@ -277,6 +284,30 @@ class UptodownSource:
                 download_url = f"https://dw.uptodown.com/dwn/{final_token}"
                 
             version_name = self._get_real_version(soup_dl, download_url)
+            self._log(f"Extracted token URL: {download_url}")
+
+            # --- קסם: פיענוח לינק ה-CDN הישיר ---
+            self._log("Resolving final CDN URL using scraper to bypass anti-bot...")
+            try:
+                # קריטי: השרת דורש שה-Referer יהיה בדיוק העמוד שממנו נלקח הטוקן (זה עם ה-x בסוף)
+                self.scraper.headers.update({"Referer": pre_download_url})
+                
+                # עוקבים אחרי ה-Redirect מבלי להוריד את הקובץ לזיכרון
+                r_final = self.scraper.get(download_url, stream=True, allow_redirects=True, timeout=30)
+                final_cdn_url = r_final.url
+                status_code = r_final.status_code
+                r_final.close()
+                
+                if status_code < 400:
+                    self._log(f"Successfully resolved CDN URL: {final_cdn_url}")
+                    # אנחנו שותלים את לינק ה-CDN הציבורי והפתוח כדי ש-run.py יקבל אותו
+                    download_url = final_cdn_url 
+                else:
+                    self._log(f"Warning: CDN resolution returned HTTP {status_code}")
+                    
+            except Exception as e:
+                self._log(f"Failed to resolve CDN URL: {e}")
+            # ---------------------------------
 
             self._log(f"Final version: {version_name}")
             self._log(f"Final URL: {download_url}")
@@ -284,6 +315,8 @@ class UptodownSource:
 
         except Exception as e:
             self._log(f"Error: {e}")
+            import traceback
+            traceback.print_exc()
             return None, None
 
     # ---------- Public interface ----------
@@ -297,31 +330,10 @@ class UptodownSource:
     def get_download_url(self, initial_url):
         self._log(f"get_download_url({initial_url})")
         
-        target_url = None
+        # מכיוון שפיענחנו את הלינק קודם, initial_url הוא עכשיו לינק ציבורי ישיר לשרת ה-CDN!
         if initial_url.startswith("uptodown_direct:"):
-            target_url = initial_url.split("uptodown_direct:", 1)[1]
-        else:
-            package_name = initial_url.split("fallback:", 1)[1] if "fallback:" in initial_url else initial_url
-            target_url, _ = self._get_uptodown_app(package_name)
+            return initial_url.split("uptodown_direct:", 1)[1]
             
-        if target_url:
-            self._log("Resolving final CDN URL using scraper to bypass anti-bot...")
-            try:
-                self.scraper.headers.update({"Referer": "https://en.uptodown.com/"})
-                # אנחנו עוקבים פעם אחת אחרי ה-Redirect של Uptodown כדי לקבל את כתובת ה-CDN החופשית!
-                r = self.scraper.get(target_url, stream=True, allow_redirects=True, timeout=30)
-                final_cdn_url = r.url
-                r.close() # סוגרים את החיבור מיד, לא מורידים פה
-                
-                if r.status_code >= 400:
-                    self._log(f"Warning: Token resolution returned HTTP {r.status_code}")
-                    return target_url # במקרה חירום
-                    
-                self._log(f"Successfully resolved CDN URL: {final_cdn_url}")
-                return final_cdn_url # מחזירים את כתובת ה-CDN החופשית ל-run.py!
-                
-            except Exception as e:
-                self._log(f"Failed to resolve CDN URL: {e}")
-                return target_url
-                
-        return None
+        package_name = initial_url.split("fallback:", 1)[1] if "fallback:" in initial_url else initial_url
+        url, _ = self._get_uptodown_app(package_name)
+        return url
