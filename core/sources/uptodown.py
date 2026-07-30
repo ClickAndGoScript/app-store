@@ -276,7 +276,8 @@ class UptodownSource:
             # -------------------------------------------------------------
             # השלב הקריטי: מעבר לעמוד ה--x (העמוד שמייצר את הלינק המלא האמיתי)
             # -------------------------------------------------------------
-            post_download_url = f"{current_download_page}-x" if not current_download_page.endswith('-x') else current_download_page
+            # התיקון: מבטיחים שהכתובת תמיד תהיה בפורמט: app_url/download/ID-x
+            post_download_url = f"{app_url}/download/{target_file_id}-x"
             self._log(f"Fetching post-download (-x) page: {post_download_url}")
             
             self.scraper.headers.update({'Referer': current_download_page})
@@ -286,7 +287,7 @@ class UptodownSource:
                 self._log(f"Failed to load post-download page (Status {r_post.status_code}).")
                 return None, None
 
-            # שולפים בעזרת Regex את הלינק המושלם מתוך העמוד (זה שכולל את dw.uptodown.net ואת סיומת ה-.apk בסוף)
+            # שולפים בעזרת Regex את הלינק המושלם מתוך העמוד
             download_url = None
             match = re.search(r'(https://dw\.uptodown\.(?:net|com)/dwn/[^\s"\'<>]+)', r_post.text)
             
