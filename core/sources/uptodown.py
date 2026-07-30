@@ -330,8 +330,31 @@ class UptodownSource:
 
     def get_download_url(self, initial_url):
         self._log(f"get_download_url({initial_url})")
+        
         if initial_url.startswith("uptodown_direct:"):
-            return initial_url.split("uptodown_direct:", 1)[1]
+            # מחלצים את כתובת הטוקן המקורית
+            token_url = initial_url.split("uptodown_direct:", 1)[1]
+            
+            self._log(f"Resolving redirect for token URL using scraper session...")
+            try:
+                # הוספת Referer עוזרת לעקוף חסימות Hotlink
+                self.scraper.headers.update({"Referer": "https://en.uptodown.com/"})
+                
+                # אנחנו משתמשים ב-stream=True כדי לא להוריד את הקובץ לזיכרון פה,
+                # אלא רק כדי לעקוב אחרי ה-302 Redirect ולקבל את כתובת ה-CDN הסופית.
+                r = self.scraper.get(token_url, stream=True, allow_redirects=True, timeout=self.timeout)
+                
+                final_cdn_url = r.url
+                r.close() # חובה לסגור את החיבור
+                
+                self._log(f"Resolved CDN URL: {final_cdn_url}")
+                return final_cdn_url
+                
+            except Exception as e:
+                self._log(f"Failed to resolve CDN URL, falling back to token URL: {e}")
+                return token_url
+
+        # (גיבוי למקרה של Fallback - למרות שזה לא מנוצל בפועל לפי הלוגים שלך)
         package_name = initial_url.split("fallback:", 1)[1] if "fallback:" in initial_url else initial_url
         url, _ = self._get_uptodown_app(package_name)
         return url
