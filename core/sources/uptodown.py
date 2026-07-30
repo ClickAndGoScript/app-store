@@ -1,6 +1,9 @@
 import re
 import json
 import requests
+import urllib.request
+import os
+import tempfile
 from bs4 import BeautifulSoup
 import cloudscraper
 
@@ -18,41 +21,88 @@ class UptodownSource:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         })
         
-        # הפעלת פאטצ' ההורדה מיד עם טעינת המחלקה
+        # הפעלת פאטצ' ההורדה העמוק מיד עם טעינת המחלקה
         self._patch_requests()
 
     def _patch_requests(self):
         """
-        Monkey-patch requests so the main run.py script will automatically
-        use our authenticated cloudscraper session when downloading from Uptodown.
+        DEEP Monkey-patch for both requests and urllib.
+        This ensures that regardless of how run.py downloads the file,
+        it will use our authenticated session.
         """
-        if hasattr(requests, '_uptodown_patched'):
-            return
+        # --- 1. Deep patch for 'requests' (catches all methods, even imported ones) ---
+        if not hasattr(requests.Session, '_uptodown_patched'):
+            original_session_request = requests.Session.request
             
-        original_get = requests.get
-        original_session_get = requests.Session.get
-        
-        def custom_get(url, *args, **kwargs):
-            if isinstance(url, str) and 'uptodown.com' in url:
-                self._log("Intercepted direct download request via monkey-patch!")
-                return self.scraper.get(url, *args, **kwargs)
-            return original_get(url, *args, **kwargs)
-            
-        def custom_session_get(session, url, *args, **kwargs):
-            # מניעת לולאה אינסופית: אם cloudscraper בעצמו מבצע את הבקשה, תן לו להמשיך רגיל!
-            if session is self.scraper:
-                return original_session_get(session, url, *args, **kwargs)
-                
-            if isinstance(url, str) and 'uptodown.com' in url:
-                self._log("Intercepted Session download request via monkey-patch!")
-                return self.scraper.get(url, *args, **kwargs)
-                
-            return original_session_get(session, url, *args, **kwargs)
+            def custom_session_request(session, method, url, *args, **kwargs):
+                # מונע לולאה אינסופית
+                if session is self.scraper:
+                    return original_session_request(session, method, url, *args, **kwargs)
+                    
+                if isinstance(url, str) and 'uptodown.com' in url:
+                    self._log(f"Intercepted deep requests.Session.request ({method})!")
+                    return self.scraper.request(method, url, *args, **kwargs)
+                    
+                return original_session_request(session, method, url, *args, **kwargs)
 
-        # מחליפים את הפונקציות המקוריות באלה שלנו
-        requests.get = custom_get
-        requests.Session.get = custom_session_get
-        requests._uptodown_patched = True
+            requests.Session.request = custom_session_request
+            requests.Session._uptodown_patched = True
+
+        # --- 2. Patch for 'urllib.request.urlretrieve' (נפוץ מאוד בהורדות) ---
+        if not hasattr(urllib.request, '_uptodown_retrieve_patched'):
+            original_urlretrieve = urllib.request.urlretrieve
+            
+            def custom_urlretrieve(url, filename=None, reporthook=None, data=None):
+                if isinstance(url, str) and 'uptodown.com' in url:
+                    self._log("Intercepted urllib.request.urlretrieve!")
+                    r = self.scraper.get(url, stream=True)
+                    r.raise_for_status()
+                    
+                    if not filename:
+                        fd, filename = tempfile.mkstemp()
+                        os.close(fd)
+                        
+                    with open(filename, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+                                
+                    class MockHeaders(dict):
+                        def get_all(self, name, default): return [self.get(name, default)]
+                        def get(self, name, default=None): return super().get(name.lower(), default)
+                        
+                    return (filename, MockHeaders({k.lower(): v for k, v in r.headers.items()}))
+                    
+                return original_urlretrieve(url, filename, reporthook, data)
+                
+            urllib.request.urlretrieve = custom_urlretrieve
+            urllib.request._uptodown_retrieve_patched = True
+            
+        # --- 3. Patch for 'urllib.request.urlopen' ---
+        if not hasattr(urllib.request, '_uptodown_urlopen_patched'):
+            original_urlopen = urllib.request.urlopen
+            
+            def custom_urlopen(url, *args, **kwargs):
+                url_str = url if isinstance(url, str) else getattr(url, 'full_url', str(url))
+                
+                if isinstance(url_str, str) and 'uptodown.com' in url_str:
+                    self._log("Intercepted urllib.request.urlopen!")
+                    
+                    # הזרקת ה-Headers וה-Cookies שלנו ישירות לאובייקט הבקשה המובנה
+                    req = urllib.request.Request(url_str) if isinstance(url, str) else url
+                    req.add_header('User-Agent', self.scraper.headers.get('User-Agent', 'Mozilla/5.0'))
+                    req.add_header('Referer', 'https://en.uptodown.com/')
+                    
+                    cookie_str = "; ".join([f"{k}={v}" for k, v in self.scraper.cookies.items()])
+                    if cookie_str:
+                        req.add_header('Cookie', cookie_str)
+                        
+                    return original_urlopen(req, *args, **kwargs)
+                    
+                return original_urlopen(url, *args, **kwargs)
+                
+            urllib.request.urlopen = custom_urlopen
+            urllib.request._uptodown_urlopen_patched = True
 
     def _log(self, *args, **kwargs):
         if self.debug:
