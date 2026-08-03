@@ -145,7 +145,7 @@ class UptodownSource:
             if self.uptodown_subdomain:
                 app_url = f"https://{self.uptodown_subdomain}.en.uptodown.com/android"
             else:
-                # 1. סינון סיומות נפוצות כדי לנחש את הכתובת הישירה
+                # 1. סינון סיומות נפוצות כדי לנחש את הכתובת הישירה (אוניברסלי לחלוטין מתוך שם החבילה)
                 parts = package_name.split('.')
                 query_parts = [p for p in parts if p.lower() not in ('com', 'org', 'net', 'co', 'io', 'gov', 'android', 'app', 'mobile')]
                 
@@ -201,62 +201,62 @@ class UptodownSource:
                     else:
                         self._log("Internal search page blocked. Moving to external search fallback.")
 
-                # 3. חיפוש ב-DuckDuckGo Lite
+                # 3. גיבוי אוניברסלי 1: Bing (ידידותי לשרתי ענן / GitHub Actions)
                 if not app_url:
-                    self._log("Trying external generic search engine (DuckDuckGo Lite)...")
-                    try:
-                        search_url = "https://lite.duckduckgo.com/lite/"
-                        data = {"q": f'site:en.uptodown.com/android "{package_name}"'}
-                        headers = {
-                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                            "Content-Type": "application/x-www-form-urlencoded"
-                        }
-                        r_ddg = self.scraper.post(search_url, headers=headers, data=data, timeout=self.timeout)
-                        self._log(f"DDG Lite status: {r_ddg.status_code}")
-                        
-                        if r_ddg.status_code == 200:
-                            self._dump_html(f"ddglite_{package_name}", r_ddg.text)
-                            
-                            decoded_text = urllib.parse.unquote(r_ddg.text)
-                            matches = re.findall(r'(https://[a-z0-9-]+\.en\.uptodown\.com/android)', decoded_text)
-                            
-                            for match in matches:
-                                if 'uptodown-android' not in match:
-                                    app_url = match
-                                    self._log(f"Found app via DDG Lite search: {app_url}")
-                                    break
-                    except Exception as e:
-                        self._log(f"DDG Lite search error: {e}")
-
-                # 4. חיפוש בגוגל
-                if not app_url:
-                    self._log("Trying external generic search engine (Google)...")
+                    self._log("Trying external generic search engine (Bing)...")
                     try:
                         query = f'site:en.uptodown.com/android "{package_name}"'
-                        google_url = f"https://www.google.com/search?q={urllib.parse.quote_plus(query)}"
+                        bing_url = f"https://www.bing.com/search?q={urllib.parse.quote_plus(query)}"
                         
                         headers = {
                             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                            "Accept-Language": "en-US,en;q=0.9",
-                            "Cookie": "CONSENT=YES+cb.20210720-07-p0.en+FX+410;" 
+                            "Accept-Language": "en-US,en;q=0.9"
                         }
+                        r_bing = self.scraper.get(bing_url, headers=headers, timeout=self.timeout)
+                        self._log(f"Bing status: {r_bing.status_code}")
                         
-                        r_google = self.scraper.get(google_url, headers=headers, timeout=self.timeout)
-                        self._log(f"Google Search status: {r_google.status_code}")
-                        
-                        if r_google.status_code == 200:
-                            self._dump_html(f"google_{package_name}", r_google.text)
+                        if r_bing.status_code == 200:
+                            self._dump_html(f"bing_{package_name}", r_bing.text)
                             
-                            decoded_text = urllib.parse.unquote(r_google.text)
+                            decoded_text = urllib.parse.unquote(r_bing.text)
                             matches = re.findall(r'(https://[a-z0-9-]+\.en\.uptodown\.com/android)', decoded_text)
                             
                             for match in matches:
                                 if 'uptodown-android' not in match:
                                     app_url = match
-                                    self._log(f"Found app via Google search: {app_url}")
+                                    self._log(f"Found app via Bing search: {app_url}")
                                     break
                     except Exception as e:
-                        self._log(f"Google search error: {e}")
+                        self._log(f"Bing search error: {e}")
+
+                # 4. גיבוי אוניברסלי 2: Yahoo
+                if not app_url:
+                    self._log("Trying external generic search engine (Yahoo)...")
+                    try:
+                        query = f'site:en.uptodown.com/android "{package_name}"'
+                        yahoo_url = f"https://search.yahoo.com/search?p={urllib.parse.quote_plus(query)}"
+                        
+                        headers = {
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            "Accept-Language": "en-US,en;q=0.9"
+                        }
+                        
+                        r_yahoo = self.scraper.get(yahoo_url, headers=headers, timeout=self.timeout)
+                        self._log(f"Yahoo status: {r_yahoo.status_code}")
+                        
+                        if r_yahoo.status_code == 200:
+                            self._dump_html(f"yahoo_{package_name}", r_yahoo.text)
+                            
+                            decoded_text = urllib.parse.unquote(r_yahoo.text)
+                            matches = re.findall(r'(https://[a-z0-9-]+\.en\.uptodown\.com/android)', decoded_text)
+                            
+                            for match in matches:
+                                if 'uptodown-android' not in match:
+                                    app_url = match
+                                    self._log(f"Found app via Yahoo search: {app_url}")
+                                    break
+                    except Exception as e:
+                        self._log(f"Yahoo search error: {e}")
 
             if not app_url:
                 self._log("Could not determine app URL after all fallback attempts.")
