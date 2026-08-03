@@ -1,5 +1,6 @@
 import re
 import json
+import time
 import cloudscraper
 import urllib.parse
 import socket
@@ -11,8 +12,9 @@ class UptodownSource:
         self.timeout = timeout
         self.debug = debug
 
+        # שינינו ל-Chrome מודרני כדי לחמוק מחסימות 410
         self.scraper = cloudscraper.create_scraper(
-            browser={'browser': 'firefox', 'platform': 'windows', 'desktop': True}
+            browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
         )
         self.scraper.headers.update({
             "Accept-Language": "en-US,en;q=0.9",
@@ -23,23 +25,18 @@ class UptodownSource:
         if self.debug:
             print("[DEBUG]", *args, **kwargs)
 
-    # פונקציית עזר להעלאת ה-HTML לשרת Termbin כדי שנוכל לקרוא אותו מגיטהאב
+    # פונקציית עזר להעלאת ה-HTML לשרת Termbin
     def _dump_html(self, step_name, html_content):
         if not self.debug:
             return
             
         self._log(f"Uploading HTML dump for '{step_name}' to Termbin...")
         try:
-            # כותרת ברורה למסמך שייווצר
             text_to_send = f"=== HTML DUMP FOR STEP: {step_name} ===\n\n{html_content}"
-            
-            # התחברות לשרת ושליחת המידע
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(15) 
             s.connect(("termbin.com", 9999))
             s.sendall(text_to_send.encode("utf-8"))
-            
-            # קבלת הלינק חזרה מהשרת
             url = s.recv(1024).decode("utf-8").strip()
             s.close()
             
@@ -173,7 +170,7 @@ class UptodownSource:
                         
                         if app_url: break
                 
-                # 2. חיפוש דרך מנוע החיפוש הפנימי של Uptodown
+                # 2. חיפוש דרך מנוע החיפוש הפנימי
                 if not app_url:
                     search_query_escaped = urllib.parse.quote_plus(package_name)
                     search_url = f"https://en.uptodown.com/android/search?q={search_query_escaped}"
@@ -261,7 +258,7 @@ class UptodownSource:
                 self._log("Could not determine app URL after all fallback attempts.")
                 return None, None
 
-            # --- שלב 1: כניסה לעמוד הראשי של האפליקציה ב-Uptodown ---
+            # --- שלב 1: כניסה לעמוד הראשי של האפליקציה ---
             self._log(f"Fetching main app page: {app_url}")
             r_main = self.scraper.get(app_url, timeout=self.timeout)
             
@@ -272,26 +269,40 @@ class UptodownSource:
             self._dump_html(f"main_page_{package_name}", r_main.text)
             soup_main = BeautifulSoup(r_main.text, 'html.parser')
             
-            # חיפוש הכפתור "Get the latest version" לעמוד ההורדה
             latest_btn = soup_main.select_one('a.button-download, div.button-download a, button#detail-download-button, a.latest, a[href$="/download"]')
             
             if not latest_btn:
                 self._log("CRITICAL: Could not find the 'Get the latest version' button on the main page.")
                 return None, None
                 
-            # חילוץ הלינק ובניית כתובת מלאה
             raw_download_link = latest_btn.get('href') or latest_btn.get('data-url')
             if not raw_download_link:
                 self._log("CRITICAL: Found the button but it has no link attached.")
                 return None, None
-                
-            download_page_url = urllib.parse.urljoin(r_main.url, raw_download_link)
+            
+            # בניית כתובת מלאה ובטוחה לעמוד ההורדה
+            base_url = r_main.url if r_main.url.endswith('/') else r_main.url + '/'
+            download_page_url = urllib.parse.urljoin(base_url, raw_download_link)
             self._log(f"Successfully extracted exact download page URL: {download_page_url}")
             
+            # --- המתנה קריטית לעקיפת 410 ---
+            # חומת האש חוסמת בוטים שעוברים עמודים ללא המתנה (0 מילישניות). נדמה בן אדם!
+            time.sleep(2)
+            
             # --- שלב 2: כניסה לעמוד ההורדה ---
-            # הוספת Referer כדי להוכיח לשרת שעברנו דרך עמוד חוקי ולא עקפנו מערכות הגנה
             self.scraper.headers.update({"Referer": r_main.url})
             r_dl = self.scraper.get(download_page_url, timeout=self.timeout)
+            
+            # נשק יום הדין למקרה של 410/403 על עמוד ההורדה
+            if r_dl.status_code in [410, 403]:
+                self._log(f"Got {r_dl.status_code} on download page. Trying standard requests fallback...")
+                import requests
+                fallback_headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                    "Referer": r_main.url
+                }
+                r_dl = requests.get(download_page_url, headers=fallback_headers, timeout=self.timeout)
             
             if r_dl.status_code != 200:
                 self._log(f"CRITICAL: Failed to load specific download page! Status {r_dl.status_code}")
@@ -300,12 +311,10 @@ class UptodownSource:
             self._dump_html(f"download_page_{package_name}", r_dl.text)
             soup_dl = BeautifulSoup(r_dl.text, 'html.parser')
             
-            # חילוץ מזהה הקובץ והגרסה
             name_el = soup_dl.select_one('#detail-app-name')
             default_file_id = name_el.get('data-file-id') if name_el else None
             target_file_id = default_file_id
 
-            # סינון XAPK והעדפת APK טהור
             format_el = soup_dl.select_one('span.format')
             file_format = format_el.get_text(strip=True).upper() if format_el else "APK"
 
@@ -321,7 +330,7 @@ class UptodownSource:
                         variants_url = f"https://{domain}/app/{data_code}/version/{data_version}/files"
                         
                         try:
-                            # הוספת Referer גם לשלב הבקשה הפנימית
+                            time.sleep(1)
                             self.scraper.headers.update({"Referer": r_dl.url})
                             r_var = self.scraper.get(variants_url, timeout=self.timeout)
                             if r_var.status_code == 200:
@@ -344,16 +353,21 @@ class UptodownSource:
                 current_download_page = f"{app_url}/download/{target_file_id}"
                 self._log(f"Fetching specific variant download page: {current_download_page}")
                 
+                time.sleep(1)
                 self.scraper.headers.update({"Referer": r_dl.url})
                 r_dl_var = self.scraper.get(current_download_page, timeout=self.timeout)
                 
+                if r_dl_var.status_code in [410, 403]:
+                    import requests
+                    r_dl_var = requests.get(current_download_page, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Referer": r_dl.url}, timeout=self.timeout)
+
                 if r_dl_var.status_code == 200:
                     self._dump_html(f"specific_variant_{package_name}", r_dl_var.text)
                     soup_dl = BeautifulSoup(r_dl_var.text, 'html.parser')
                 else:
                     self._log(f"Failed to load variant page (Status {r_dl_var.status_code}). Proceeding with default.")
 
-            # --- שלב 3: חילוץ טוקן ההורדה והרכבת הכתובת הסופית משרת uptodown.net ---
+            # --- שלב 3: חילוץ טוקן ההורדה והרכבת הכתובת הסופית ---
             download_button = soup_dl.select_one('#detail-download-button')
             final_token = download_button.get('data-url') if download_button else None
             
@@ -372,10 +386,9 @@ class UptodownSource:
             if final_token.startswith('http'):
                 download_url = final_token
             else:
-                # הרכבת הקישור לשרתי uptodown.net במקום com שבוטל
+                # הרכבת הקישור לשרתי uptodown.net (על בסיס התמונה מה-IDM שלך)
                 download_url = f"https://dw.uptodown.net/dwn/{final_token}"
             
-            # הבטחת סיומת חוקית
             if not download_url.endswith('.apk'):
                 download_url = f"{download_url.rstrip('/')}/app.apk"
             
