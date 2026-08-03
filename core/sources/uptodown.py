@@ -2,8 +2,9 @@ import re
 import json
 import cloudscraper
 import urllib.parse
-from bs4 import BeautifulSoup
 import socket
+from bs4 import BeautifulSoup
+
 class UptodownSource:
     def __init__(self, uptodown_subdomain=None, timeout=30, debug=True):
         self.uptodown_subdomain = uptodown_subdomain
@@ -22,7 +23,6 @@ class UptodownSource:
         if self.debug:
             print("[DEBUG]", *args, **kwargs)
 
-    # פונקציית עזר לשמירת ה-HTML לקובץ לצורכי דיבוג
     # פונקציית עזר להעלאת ה-HTML לשרת Termbin כדי שנוכל לקרוא אותו מגיטהאב
     def _dump_html(self, step_name, html_content):
         if not self.debug:
@@ -30,14 +30,12 @@ class UptodownSource:
             
         self._log(f"Uploading HTML dump for '{step_name}' to Termbin...")
         try:
-            import socket
-            
             # כותרת ברורה למסמך שייווצר
             text_to_send = f"=== HTML DUMP FOR STEP: {step_name} ===\n\n{html_content}"
             
-            # התחברות לשרת ושליחת המידע (בדיוק כמו בקוד ששלחת)
+            # התחברות לשרת ושליחת המידע
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(15) # הוספתי טיימאאוט קצת יותר ארוך ליתר ביטחון
+            s.settimeout(15) 
             s.connect(("termbin.com", 9999))
             s.sendall(text_to_send.encode("utf-8"))
             
@@ -50,6 +48,7 @@ class UptodownSource:
             self._log(f"========================================================")
         except Exception as e:
             self._log(f"[-] Failed to upload HTML dump to Termbin: {e}")
+
     # ---------- Version extraction ----------
     def _extract_version_from_title(self, soup):
         title = soup.find('title')
@@ -145,7 +144,7 @@ class UptodownSource:
             if self.uptodown_subdomain:
                 app_url = f"https://{self.uptodown_subdomain}.en.uptodown.com/android"
             else:
-                # 1. סינון סיומות נפוצות כדי לנחש את הכתובת הישירה (אוניברסלי לחלוטין מתוך שם החבילה)
+                # 1. ניסיון ניחוש אוניברסלי לפי Package Name
                 parts = package_name.split('.')
                 query_parts = [p for p in parts if p.lower() not in ('com', 'org', 'net', 'co', 'io', 'gov', 'android', 'app', 'mobile')]
                 
@@ -201,7 +200,7 @@ class UptodownSource:
                     else:
                         self._log("Internal search page blocked. Moving to external search fallback.")
 
-                # 3. גיבוי אוניברסלי 1: Bing (ידידותי לשרתי ענן / GitHub Actions)
+                # 3. גיבוי אוניברסלי 1: Bing
                 if not app_url:
                     self._log("Trying external generic search engine (Bing)...")
                     try:
@@ -262,31 +261,55 @@ class UptodownSource:
                 self._log("Could not determine app URL after all fallback attempts.")
                 return None, None
 
-            # כניסה לעמוד ההורדה הראשי
-            download_page = f"{app_url.rstrip('/')}/download"
-            self._log(f"Download page: {download_page}")
-            r_dl = self.scraper.get(download_page, timeout=self.timeout)
+            # --- שלב 1: כניסה לעמוד הראשי של האפליקציה ב-Uptodown ---
+            self._log(f"Fetching main app page: {app_url}")
+            r_main = self.scraper.get(app_url, timeout=self.timeout)
+            
+            if r_main.status_code != 200:
+                self._log(f"CRITICAL: Failed to load main app page! Status {r_main.status_code}")
+                return None, None
+                
+            self._dump_html(f"main_page_{package_name}", r_main.text)
+            soup_main = BeautifulSoup(r_main.text, 'html.parser')
+            
+            # חיפוש הכפתור "Get the latest version" לעמוד ההורדה
+            latest_btn = soup_main.select_one('a.button-download, div.button-download a, button#detail-download-button, a.latest, a[href$="/download"]')
+            
+            if not latest_btn:
+                self._log("CRITICAL: Could not find the 'Get the latest version' button on the main page.")
+                return None, None
+                
+            # חילוץ הלינק ובניית כתובת מלאה
+            raw_download_link = latest_btn.get('href') or latest_btn.get('data-url')
+            if not raw_download_link:
+                self._log("CRITICAL: Found the button but it has no link attached.")
+                return None, None
+                
+            download_page_url = urllib.parse.urljoin(r_main.url, raw_download_link)
+            self._log(f"Successfully extracted exact download page URL: {download_page_url}")
+            
+            # --- שלב 2: כניסה לעמוד ההורדה ---
+            # הוספת Referer כדי להוכיח לשרת שעברנו דרך עמוד חוקי ולא עקפנו מערכות הגנה
+            self.scraper.headers.update({"Referer": r_main.url})
+            r_dl = self.scraper.get(download_page_url, timeout=self.timeout)
             
             if r_dl.status_code != 200:
-                self._log(f"CRITICAL: Failed to load download page! Status {r_dl.status_code}")
+                self._log(f"CRITICAL: Failed to load specific download page! Status {r_dl.status_code}")
                 return None, None
-            
-            # שמירת ה-HTML של עמוד ההורדה במידת הצורך
+                
             self._dump_html(f"download_page_{package_name}", r_dl.text)
-
             soup_dl = BeautifulSoup(r_dl.text, 'html.parser')
-            name_el = soup_dl.select_one('#detail-app-name')
-            if not name_el:
-                return None, None
             
-            default_file_id = name_el.get('data-file-id')
+            # חילוץ מזהה הקובץ והגרסה
+            name_el = soup_dl.select_one('#detail-app-name')
+            default_file_id = name_el.get('data-file-id') if name_el else None
             target_file_id = default_file_id
 
             # סינון XAPK והעדפת APK טהור
             format_el = soup_dl.select_one('span.format')
             file_format = format_el.get_text(strip=True).upper() if format_el else "APK"
 
-            if "XAPK" in file_format or "APK" not in file_format:
+            if ("XAPK" in file_format or "APK" not in file_format) and default_file_id:
                 self._log("Default file is XAPK. Searching for pure APK variants...")
                 variants_btn = soup_dl.select_one('button.variants')
                 if variants_btn:
@@ -298,6 +321,8 @@ class UptodownSource:
                         variants_url = f"https://{domain}/app/{data_code}/version/{data_version}/files"
                         
                         try:
+                            # הוספת Referer גם לשלב הבקשה הפנימית
+                            self.scraper.headers.update({"Referer": r_dl.url})
                             r_var = self.scraper.get(variants_url, timeout=self.timeout)
                             if r_var.status_code == 200:
                                 self._dump_html(f"variants_{package_name}", r_var.text)
@@ -315,20 +340,20 @@ class UptodownSource:
                         except Exception:
                             pass
 
-            if not target_file_id:
-                return None, None
-                
-            self._log(f"Final selected file ID: {target_file_id}")
-
-            current_download_page = download_page
-            if target_file_id != default_file_id:
+            if target_file_id and target_file_id != default_file_id:
                 current_download_page = f"{app_url}/download/{target_file_id}"
                 self._log(f"Fetching specific variant download page: {current_download_page}")
-                r_dl = self.scraper.get(current_download_page, timeout=self.timeout)
-                self._dump_html(f"specific_variant_{package_name}", r_dl.text)
-                soup_dl = BeautifulSoup(r_dl.text, 'html.parser')
+                
+                self.scraper.headers.update({"Referer": r_dl.url})
+                r_dl_var = self.scraper.get(current_download_page, timeout=self.timeout)
+                
+                if r_dl_var.status_code == 200:
+                    self._dump_html(f"specific_variant_{package_name}", r_dl_var.text)
+                    soup_dl = BeautifulSoup(r_dl_var.text, 'html.parser')
+                else:
+                    self._log(f"Failed to load variant page (Status {r_dl_var.status_code}). Proceeding with default.")
 
-            # חילוץ הטוקן מהכפתור ישירות מעמוד ההורדה הרשמי
+            # --- שלב 3: חילוץ טוקן ההורדה והרכבת הכתובת הסופית משרת uptodown.net ---
             download_button = soup_dl.select_one('#detail-download-button')
             final_token = download_button.get('data-url') if download_button else None
             
@@ -339,20 +364,20 @@ class UptodownSource:
                     self._log("CRITICAL: Failed to find download token or link in button!")
                     return None, None
             
-            # -------------------------------------------------------------
-            # השלמת הכתובת
-            # -------------------------------------------------------------
             final_token = final_token.strip('/')
             
             if final_token.startswith('dwn/'):
                 final_token = final_token[4:]
-            elif final_token.startswith('http'):
-                if not final_token.endswith('.apk'):
-                    final_token = f"{final_token.rstrip('/')}/app.apk"
+                
+            if final_token.startswith('http'):
                 download_url = final_token
+            else:
+                # הרכבת הקישור לשרתי uptodown.net במקום com שבוטל
+                download_url = f"https://dw.uptodown.net/dwn/{final_token}"
             
-            if not final_token.startswith('http'):
-                download_url = f"https://dw.uptodown.com/dwn/{final_token}/app.apk"
+            # הבטחת סיומת חוקית
+            if not download_url.endswith('.apk'):
+                download_url = f"{download_url.rstrip('/')}/app.apk"
             
             version_name = self._get_real_version(soup_dl, download_url)
 
