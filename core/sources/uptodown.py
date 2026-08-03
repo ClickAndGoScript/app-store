@@ -117,19 +117,15 @@ class UptodownSource:
             if self.uptodown_subdomain:
                 app_url = f"https://{self.uptodown_subdomain}.en.uptodown.com/android"
             else:
-                # סינון סיומות נפוצות מה-Package Name כדי לקבל את שם האפליקציה נטו
+                # 1. סינון סיומות נפוצות מה-Package Name כדי לנסות לנחש את הכתובת הישירה (הכי מהיר אם עובד)
                 parts = package_name.split('.')
                 query_parts = [p for p in parts if p.lower() not in ('com', 'org', 'net', 'co', 'io', 'gov', 'android', 'app', 'mobile')]
                 
-                # 1. ניסיון ניחוש URL דינמי לחלוטין
                 if query_parts:
                     guesses = []
-                    # מוסיף את החלק הראשון (למשל whatsapp)
                     guesses.append(f"https://{query_parts[0].lower()}.en.uptodown.com/android")
-                    # מוסיף את החלק האחרון (אם שונה מהראשון)
                     if query_parts[-1].lower() != query_parts[0].lower():
                         guesses.append(f"https://{query_parts[-1].lower()}.en.uptodown.com/android")
-                    # מוסיף שילוב של שניהם (למשל facebook-katana)
                     if len(query_parts) > 1:
                         joined_guess = "-".join(query_parts).lower()
                         guesses.append(f"https://{joined_guess}.en.uptodown.com/android")
@@ -150,7 +146,7 @@ class UptodownSource:
                         
                         if app_url: break
                 
-                # 2. גיבוי דרך מנוע החיפוש הרשמי של Uptodown
+                # 2. גיבוי דרך מנוע החיפוש הפנימי של Uptodown
                 if not app_url:
                     search_query_escaped = urllib.parse.quote_plus(package_name)
                     search_url = f"https://en.uptodown.com/android/search?q={search_query_escaped}"
@@ -168,7 +164,6 @@ class UptodownSource:
                             soup_search = BeautifulSoup(r_search.text, 'html.parser')
                             for item in soup_search.select('.item .name a, a.app-link'):
                                 href = item.get('href', '')
-                                # מונע הורדה בטעות של חנות האפליקציות עצמה
                                 if href and 'uptodown-android' not in href:
                                     app_url = href.split('/download')[0]
                                     self._log(f"Found app via search selector: {app_url}")
@@ -176,22 +171,36 @@ class UptodownSource:
                     else:
                         self._log("Internal search page blocked. Moving to external search fallback.")
 
-                # 3. נשק יום הדין: חיפוש ב-DuckDuckGo (עוקף חסימות אגרסיביות ומוצא במדויק לפי Package Name)
+                # 3. גיבוי אוניברסלי מנצח: חיפוש בגוגל ממוקד אתר ושם חבילה
                 if not app_url:
-                    self._log("Trying external generic search engine (DuckDuckGo)...")
+                    self._log("Trying external generic search engine (Google)...")
                     try:
-                        ddg_url = f"https://html.duckduckgo.com/html/?q=site:en.uptodown.com/android+%22{package_name}%22"
-                        r_ddg = self.scraper.get(ddg_url, timeout=self.timeout)
-                        if r_ddg.status_code == 200:
-                            decoded_text = urllib.parse.unquote(r_ddg.text)
-                            matches = re.findall(r'https://([a-z0-9-]+)\.en\.uptodown\.com/android', decoded_text)
-                            for sub in matches:
-                                if sub.lower() not in ('en', 'uptodown-android'):
-                                    app_url = f"https://{sub}.en.uptodown.com/android"
-                                    self._log(f"Found app via generic DuckDuckGo search: {app_url}")
+                        query = f'site:en.uptodown.com/android "{package_name}"'
+                        google_url = f"https://www.google.com/search?q={urllib.parse.quote_plus(query)}"
+                        
+                        # כותרות כדי שגוגל יחשוב שאנחנו דפדפן רגיל ולא רובוט
+                        headers = {
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            "Accept-Language": "en-US,en;q=0.9"
+                        }
+                        
+                        r_google = self.scraper.get(google_url, headers=headers, timeout=self.timeout)
+                        self._log(f"Google Search status: {r_google.status_code}")
+                        
+                        if r_google.status_code == 200:
+                            # חיפוש כל כתובות ה-URL של אפליקציות באפטודאון מתוך תוצאות החיפוש
+                            matches = re.findall(r'(https://[a-z0-9-]+\.en\.uptodown\.com/android)', r_google.text)
+                            
+                            for match in matches:
+                                if 'uptodown-android' not in match: # מתעלם מהאפליקציה הרשמית של החנות
+                                    app_url = match
+                                    self._log(f"Found app via Google search: {app_url}")
                                     break
+                        elif r_google.status_code == 429:
+                            self._log("Google blocked the request (429 Too Many Requests).")
+                            
                     except Exception as e:
-                        self._log(f"DuckDuckGo search error: {e}")
+                        self._log(f"Google search error: {e}")
 
             if not app_url:
                 self._log("Could not determine app URL after all fallback attempts.")
@@ -270,7 +279,7 @@ class UptodownSource:
                     return None, None
             
             # -------------------------------------------------------------
-            # השלמת הכתובת: טריק ה-APK כדי ש-run.py יקבל מענה תקין ללא שגיאת 404
+            # השלמת הכתובת
             # -------------------------------------------------------------
             final_token = final_token.strip('/')
             
