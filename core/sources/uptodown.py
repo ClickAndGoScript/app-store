@@ -20,7 +20,10 @@ class UptodownSource:
             "Accept-Language": "en-US,en;q=0.9",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         })
-
+        # === התיקון שלנו (שורה אחת!) ===
+        # מונע מ-downloader.py לדרוס את ה-Headers של ה-scraper עם DEFAULT_HEADERS בעייתיים
+        self.headers = {}
+    
     def _log(self, *args, **kwargs):
         if self.debug:
             print("[DEBUG]", *args, **kwargs)
