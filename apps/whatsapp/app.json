@@ -43,7 +43,7 @@
     "inject_updater": true,
     "updater_target_smali": "com/whatsapp/home/ui/HomeActivity.smali",
     "hotfixes": {
-      "2.26.27.86": ".1"
+      "2.26.30.70": ".1"
     },
     "clone_config": {
       "old_pkg": "com.whatsapp",
