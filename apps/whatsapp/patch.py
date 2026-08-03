@@ -848,43 +848,49 @@ def _patch_nuke_newsletter_conversation(root_dir):
         return False
 
     try:
-        # 1. הזרקת השומר בכניסה למסך הצ'אטים
         with open(target_file, 'r', encoding='utf-8') as f:
             content = f.read()
         original_content = content
 
-        pattern = re.compile(r"(\.method public onCreate\(Landroid/os/Bundle;\)V.*?\.locals \d+\s+)", re.DOTALL)
+        # חיפוש הגדרת המשתנים (.locals או .registers) בתחילת הפונקציה
+        pattern = re.compile(r"(\.method public onCreate\(Landroid/os/Bundle;\)V\s+(?:\.locals|\.registers) )(\d+)(\s+)", re.DOTALL)
+        match = pattern.search(content)
         
-        injection = """
+        if match:
+            locals_count = int(match.group(2))
+            new_locals = locals_count + 3 # מקצים 3 אוגרים חדשים לגמרי
+            
+            v0 = f"v{locals_count}"
+            v1 = f"v{locals_count + 1}"
+            v2 = f"v{locals_count + 2}"
+
+            # שימוש נקי שבו v1 הוא תמיד טקסט ו-v2 הוא הבוליאני
+            injection = f"""
     # --- KOSHER NEWSLETTER KILLER ---
-    invoke-virtual {p0}, Landroid/app/Activity;->getIntent()Landroid/content/Intent;
-    move-result-object v0
-    if-eqz v0, :cond_k_safe
-    const-string v1, "jid"
-    invoke-virtual {v0, v1}, Landroid/content/Intent;->getStringExtra(Ljava/lang/String;)Ljava/lang/String;
-    move-result-object v1
-    if-eqz v1, :cond_k_safe
-    const-string v2, "newsletter"
-    invoke-virtual {v1, v2}, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
-    move-result v1
-    if-eqz v1, :cond_k_safe
-    invoke-virtual {p0}, Landroid/app/Activity;->finish()V
+    invoke-virtual {{p0}}, Landroid/app/Activity;->getIntent()Landroid/content/Intent;
+    move-result-object {v0}
+    if-eqz {v0}, :cond_k_safe
+    const-string {v1}, "jid"
+    invoke-virtual {{{v0}, {v1}}}, Landroid/content/Intent;->getStringExtra(Ljava/lang/String;)Ljava/lang/String;
+    move-result-object {v1}
+    if-eqz {v1}, :cond_k_safe
+    const-string {v2}, "newsletter"
+    invoke-virtual {{{v1}, {v2}}}, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+    move-result {v2}
+    if-eqz {v2}, :cond_k_safe
+    invoke-virtual {{p0}}, Landroid/app/Activity;->finish()V
     return-void
     :cond_k_safe
     # --- END KOSHER KILLER ---
 """
-        if "KOSHER NEWSLETTER KILLER" not in content:
-            match = pattern.search(content)
-            if match:
-                new_content = content[:match.end()] + injection + content[match.end():]
-                _save_and_accumulate_diff(target_file, original_content, new_content)
-                print("    [+] Conversation activity patched to safely reject newsletters.")
-            else:
-                print("    [-] Could not find onCreate signature in Conversation.smali.")
+            # מעדכנים את כמות ה-locals המקורית למספר החדש
+            new_method_start = match.group(1) + str(new_locals) + match.group(3)
+            content = content[:match.start()] + new_method_start + injection + content[match.end():]
+            print("    [+] Conversation activity patched safely with dynamic registers.")
         else:
-            print("    [-] Conversation already patched.")
+            print("    [-] onCreate not found.")
             
-        # 2. השחתת מנוע זיהוי הערוצים של וואטסאפ בכל שאר הקבצים (JID Corruption)
+        # השחתת מנוע זיהוי הערוצים של וואטסאפ ביתר הקבצים
         patched_jids = 0
         for root_path, _, files in os.walk(root_dir):
             for file in files:
@@ -893,13 +899,16 @@ def _patch_nuke_newsletter_conversation(root_dir):
                     try:
                         with open(path, 'r', encoding='utf-8') as f2:
                             smali_code = f2.read()
-                        original_smali = smali_code
                         if '"@newsletter"' in smali_code:
                             new_smali = smali_code.replace('"@newsletter"', '"@block_nlr"')
-                            _save_and_accumulate_diff(path, original_smali, new_smali)
+                            _save_and_accumulate_diff(path, smali_code, new_smali)
                             patched_jids += 1
                     except: 
                         pass
+        
+        if content != original_content:
+            _save_and_accumulate_diff(target_file, original_content, content)
+            
         print(f"    [+] Corrupted @newsletter JID suffix in {patched_jids} files.")
         return True
 
@@ -947,7 +956,7 @@ def _patch_kill_meta_ai_fab_smali(root_dir):
 # 14. הריגת הגישה ל-Meta AI בתוך מסך השיחה (שיטת ה-Return Void)
 # --------------------------------------------------------- 
 def _patch_kill_meta_ai_conversation(root_dir):
-    import os
+    import os, re
     print(f"\n[14] Nuking Meta AI inside Conversation Activity (Safe Injection)...")
     target_file = _find_file_recursive(root_dir, "Conversation.smali")
     if not target_file:
@@ -959,62 +968,67 @@ def _patch_kill_meta_ai_conversation(root_dir):
             content = f.read()
         original_content = content
 
-        if "KOSHER META AI KILLER" in content:
-            print("    [-] Meta AI patch already present.")
-            return True
-
         start_str = ".method public onCreate(Landroid/os/Bundle;)V"
         start_idx = content.find(start_str)
-        if start_idx == -1:
-            print("    [-] onCreate not found.")
-            return False
+        if start_idx == -1: return False
             
         end_str = ".end method"
         end_idx = content.find(end_str, start_idx)
-        
         on_create_body = content[start_idx:end_idx]
         
-        last_return_idx = on_create_body.rfind("return-void")
+        # אנחנו מחפשים את כמות האוגרים המעודכנת (כי הפונקציה הקודמת כבר הגדילה אותם ב-3)
+        pattern = re.compile(r"(?:\.locals|\.registers) (\d+)")
+        match = pattern.search(on_create_body)
+        if not match: return False
+            
+        locals_count = int(match.group(1))
         
-        if last_return_idx == -1:
-            print("    [-] return-void not found in onCreate.")
-            return False
+        # אנחנו משתמשים בדיוק באותם 3 אוגרים חדשים שנוצרו כדי לשמור על יעילות זיכרון
+        if locals_count >= 3:
+            v0 = f"v{locals_count - 3}"
+            v1 = f"v{locals_count - 2}"
+            v2 = f"v{locals_count - 1}"
+        else:
+            v0, v1, v2 = "v0", "v1", "v2" 
+        
+        last_return_idx = on_create_body.rfind("return-void")
+        if last_return_idx == -1: return False
 
-        injection = """
+        injection = f"""
     # --- KOSHER META AI KILLER ---
-    invoke-virtual {p0}, Landroid/app/Activity;->getIntent()Landroid/content/Intent;
-    move-result-object v0
-    if-eqz v0, :cond_meta_safe
+    invoke-virtual {{p0}}, Landroid/app/Activity;->getIntent()Landroid/content/Intent;
+    move-result-object {v0}
+    if-eqz {v0}, :cond_meta_safe
 
-    const-string v1, "jid"
-    invoke-virtual {v0, v1}, Landroid/content/Intent;->getStringExtra(Ljava/lang/String;)Ljava/lang/String;
-    move-result-object v1
-    if-eqz v1, :cond_meta_safe
+    const-string {v1}, "jid"
+    invoke-virtual {{{v0}, {v1}}}, Landroid/content/Intent;->getStringExtra(Ljava/lang/String;)Ljava/lang/String;
+    move-result-object {v1}
+    if-eqz {v1}, :cond_meta_safe
 
-    const-string v2, "1313555000"
-    invoke-virtual {v1, v2}, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
-    move-result v1
+    const-string {v2}, "1313555000"
+    invoke-virtual {{{v1}, {v2}}}, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+    move-result {v2}
 
-    if-eqz v1, :cond_meta_safe
+    if-eqz {v2}, :cond_meta_safe
 
-    invoke-virtual {p0}, Landroid/app/Activity;->finish()V
+    invoke-virtual {{p0}}, Landroid/app/Activity;->finish()V
 
     :cond_meta_safe
-    return-void
     # --- END KOSHER META AI KILLER ---"""
 
-        new_on_create_body = on_create_body[:last_return_idx] + injection.strip() + on_create_body[last_return_idx + len("return-void"):]
+        new_on_create_body = on_create_body[:last_return_idx] + injection.strip() + "\n    " + on_create_body[last_return_idx:]
         new_content = content[:start_idx] + new_on_create_body + content[end_idx:]
 
-        _save_and_accumulate_diff(target_file, original_content, new_content)
-            
-        print("    [+] Meta AI securely blocked exactly at the last RETURN-VOID")
-        return True
+        if original_content != new_content:
+            _save_and_accumulate_diff(target_file, original_content, new_content)
+            print("    [+] Meta AI securely blocked exactly at the last RETURN-VOID")
+            return True
+
+        return False
 
     except Exception as e:
         print(f"    [-] Error: {e}")
         return False
-
 # --------------------------------------------------------- 
 # 15. תיקון ספק מדיה (Media Provider) לתיקון פתיחת PDF
 # מתקן את ההדבקה הדינמית של SigBypass
