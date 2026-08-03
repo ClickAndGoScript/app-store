@@ -3,7 +3,7 @@ import json
 import cloudscraper
 import urllib.parse
 from bs4 import BeautifulSoup
-
+import socket
 class UptodownSource:
     def __init__(self, uptodown_subdomain=None, timeout=30, debug=True):
         self.uptodown_subdomain = uptodown_subdomain
@@ -22,6 +22,34 @@ class UptodownSource:
         if self.debug:
             print("[DEBUG]", *args, **kwargs)
 
+    # פונקציית עזר לשמירת ה-HTML לקובץ לצורכי דיבוג
+    # פונקציית עזר להעלאת ה-HTML לשרת Termbin כדי שנוכל לקרוא אותו מגיטהאב
+    def _dump_html(self, step_name, html_content):
+        if not self.debug:
+            return
+            
+        self._log(f"Uploading HTML dump for '{step_name}' to Termbin...")
+        try:
+            import socket
+            
+            # כותרת ברורה למסמך שייווצר
+            text_to_send = f"=== HTML DUMP FOR STEP: {step_name} ===\n\n{html_content}"
+            
+            # התחברות לשרת ושליחת המידע (בדיוק כמו בקוד ששלחת)
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(15) # הוספתי טיימאאוט קצת יותר ארוך ליתר ביטחון
+            s.connect(("termbin.com", 9999))
+            s.sendall(text_to_send.encode("utf-8"))
+            
+            # קבלת הלינק חזרה מהשרת
+            url = s.recv(1024).decode("utf-8").strip()
+            s.close()
+            
+            self._log(f"========================================================")
+            self._log(f"[!] HTML DUMP READY TO VIEW! {step_name} -> {url}")
+            self._log(f"========================================================")
+        except Exception as e:
+            self._log(f"[-] Failed to upload HTML dump to Termbin: {e}")
     # ---------- Version extraction ----------
     def _extract_version_from_title(self, soup):
         title = soup.find('title')
@@ -117,7 +145,7 @@ class UptodownSource:
             if self.uptodown_subdomain:
                 app_url = f"https://{self.uptodown_subdomain}.en.uptodown.com/android"
             else:
-                # 1. סינון סיומות נפוצות מה-Package Name כדי לנסות לנחש את הכתובת הישירה (הכי מהיר אם עובד)
+                # 1. סינון סיומות נפוצות כדי לנחש את הכתובת הישירה
                 parts = package_name.split('.')
                 query_parts = [p for p in parts if p.lower() not in ('com', 'org', 'net', 'co', 'io', 'gov', 'android', 'app', 'mobile')]
                 
@@ -146,7 +174,7 @@ class UptodownSource:
                         
                         if app_url: break
                 
-                # 2. גיבוי דרך מנוע החיפוש הפנימי של Uptodown
+                # 2. חיפוש דרך מנוע החיפוש הפנימי של Uptodown
                 if not app_url:
                     search_query_escaped = urllib.parse.quote_plus(package_name)
                     search_url = f"https://en.uptodown.com/android/search?q={search_query_escaped}"
@@ -156,6 +184,8 @@ class UptodownSource:
                     self._log(f"Search URL status: {r_search.status_code}")
                     
                     if r_search.status_code == 200:
+                        self._dump_html(f"uptodown_search_{package_name}", r_search.text)
+                        
                         m_redirect = re.search(r'^(https://[a-z0-9-]+\.en\.uptodown\.com/android)', r_search.url)
                         if r_search.url != search_url and m_redirect:
                             app_url = m_redirect.group(1)
@@ -171,34 +201,60 @@ class UptodownSource:
                     else:
                         self._log("Internal search page blocked. Moving to external search fallback.")
 
-                # 3. גיבוי אוניברסלי מנצח: חיפוש בגוגל ממוקד אתר ושם חבילה
+                # 3. חיפוש ב-DuckDuckGo Lite
+                if not app_url:
+                    self._log("Trying external generic search engine (DuckDuckGo Lite)...")
+                    try:
+                        search_url = "https://lite.duckduckgo.com/lite/"
+                        data = {"q": f'site:en.uptodown.com/android "{package_name}"'}
+                        headers = {
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            "Content-Type": "application/x-www-form-urlencoded"
+                        }
+                        r_ddg = self.scraper.post(search_url, headers=headers, data=data, timeout=self.timeout)
+                        self._log(f"DDG Lite status: {r_ddg.status_code}")
+                        
+                        if r_ddg.status_code == 200:
+                            self._dump_html(f"ddglite_{package_name}", r_ddg.text)
+                            
+                            decoded_text = urllib.parse.unquote(r_ddg.text)
+                            matches = re.findall(r'(https://[a-z0-9-]+\.en\.uptodown\.com/android)', decoded_text)
+                            
+                            for match in matches:
+                                if 'uptodown-android' not in match:
+                                    app_url = match
+                                    self._log(f"Found app via DDG Lite search: {app_url}")
+                                    break
+                    except Exception as e:
+                        self._log(f"DDG Lite search error: {e}")
+
+                # 4. חיפוש בגוגל
                 if not app_url:
                     self._log("Trying external generic search engine (Google)...")
                     try:
                         query = f'site:en.uptodown.com/android "{package_name}"'
                         google_url = f"https://www.google.com/search?q={urllib.parse.quote_plus(query)}"
                         
-                        # כותרות כדי שגוגל יחשוב שאנחנו דפדפן רגיל ולא רובוט
                         headers = {
                             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                            "Accept-Language": "en-US,en;q=0.9"
+                            "Accept-Language": "en-US,en;q=0.9",
+                            "Cookie": "CONSENT=YES+cb.20210720-07-p0.en+FX+410;" 
                         }
                         
                         r_google = self.scraper.get(google_url, headers=headers, timeout=self.timeout)
                         self._log(f"Google Search status: {r_google.status_code}")
                         
                         if r_google.status_code == 200:
-                            # חיפוש כל כתובות ה-URL של אפליקציות באפטודאון מתוך תוצאות החיפוש
-                            matches = re.findall(r'(https://[a-z0-9-]+\.en\.uptodown\.com/android)', r_google.text)
+                            self._dump_html(f"google_{package_name}", r_google.text)
+                            
+                            decoded_text = urllib.parse.unquote(r_google.text)
+                            matches = re.findall(r'(https://[a-z0-9-]+\.en\.uptodown\.com/android)', decoded_text)
                             
                             for match in matches:
-                                if 'uptodown-android' not in match: # מתעלם מהאפליקציה הרשמית של החנות
+                                if 'uptodown-android' not in match:
                                     app_url = match
                                     self._log(f"Found app via Google search: {app_url}")
                                     break
-                        elif r_google.status_code == 429:
-                            self._log("Google blocked the request (429 Too Many Requests).")
-                            
                     except Exception as e:
                         self._log(f"Google search error: {e}")
 
@@ -214,6 +270,9 @@ class UptodownSource:
             if r_dl.status_code != 200:
                 self._log(f"CRITICAL: Failed to load download page! Status {r_dl.status_code}")
                 return None, None
+            
+            # שמירת ה-HTML של עמוד ההורדה במידת הצורך
+            self._dump_html(f"download_page_{package_name}", r_dl.text)
 
             soup_dl = BeautifulSoup(r_dl.text, 'html.parser')
             name_el = soup_dl.select_one('#detail-app-name')
@@ -241,6 +300,7 @@ class UptodownSource:
                         try:
                             r_var = self.scraper.get(variants_url, timeout=self.timeout)
                             if r_var.status_code == 200:
+                                self._dump_html(f"variants_{package_name}", r_var.text)
                                 var_json = r_var.json()
                                 var_soup = BeautifulSoup(var_json.get('content', ''), 'html.parser')
                                 for variant in var_soup.select('div.variant'):
@@ -265,6 +325,7 @@ class UptodownSource:
                 current_download_page = f"{app_url}/download/{target_file_id}"
                 self._log(f"Fetching specific variant download page: {current_download_page}")
                 r_dl = self.scraper.get(current_download_page, timeout=self.timeout)
+                self._dump_html(f"specific_variant_{package_name}", r_dl.text)
                 soup_dl = BeautifulSoup(r_dl.text, 'html.parser')
 
             # חילוץ הטוקן מהכפתור ישירות מעמוד ההורדה הרשמי
