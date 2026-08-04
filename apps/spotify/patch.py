@@ -174,7 +174,7 @@ def patch(decompiled_dir: str) -> bool:
         return False
 
     # שלב 3: החלפה
-    new_content, count = art_uri_invoke_re.subn(r'\1# \3', target_content)
+    new_content, count = art_uri_invoke_re.subn(r'\1# \2', target_content)
     if count == 0:
         print("[-] CRITICAL: Replacement failed despite pattern match. Aborting.")
         return False
