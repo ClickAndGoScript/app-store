@@ -38,6 +38,9 @@
     "name_play": "Spotify: Music and Podcasts"
   },
   "patching": {
+    "hotfixes": {
+      "9.1.70.1902": ".1"
+    },
     "skip_mitm": true
     
   },
