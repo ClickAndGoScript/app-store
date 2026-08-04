@@ -113,6 +113,51 @@ def patch(decompiled_dir: str) -> bool:
             if new_content != content:
                 with open(file_path, 'w', encoding='utf-8') as f: f.write(new_content)
                 print("[+] Patched VideoSurfaceView")
+    # =========================================================================
+    # חלק 1.5: ביטול תמונת האלבום בנגן ההתראות (MediaMetadataCompat)
+    # =========================================================================
+    print("\n[*] Disabling notification album art...")
+    builder_re = re.compile(
+        r'new-instance\s+[vp]\d+,\s+Landroid/support/v4/media/MediaMetadataCompat;'
+    )
+    art_uri_re = re.compile(
+        r'(const-string\s+([vp]\d+),\s*"android\.media\.metadata\.ALBUM_ART_URI"\s*\n\s*)'
+        r'(invoke-virtual\s+\{[^}]+\},\s*L[^;]+;->e\(Ljava/lang/String;Ljava/lang/String;\)V)',
+        re.MULTILINE
+    )
+
+    target_path = None
+    target_content = None
+
+    # מחפש את הקובץ הבונה
+    for root, dirs, files in os.walk(decompiled_dir):
+        for file in files:
+            if not file.endswith('.smali'):
+                continue
+            path = os.path.join(root, file)
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+            except Exception:
+                continue
+            if builder_re.search(content) and 'ALBUM_ART_URI' in content:
+                target_path = path
+                target_content = content
+                break
+        if target_path:
+            break
+
+    if target_path:
+        # מבטל את ה-invoke שמוסיף את ה-URI
+        new_content, count = art_uri_re.subn(r'\1# \3', target_content)
+        if count > 0:
+            with open(target_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+            print(f"[+] Notification album art disabled in {target_path}")
+        else:
+            print("[!] Could not find the ALBUM_ART_URI invoke in builder file.")
+    else:
+        print("[!] MediaMetadataCompat builder file not found – skipping album art patch.")                
 
     # =========================================================================
     # חלק 2: הזרקת מנגנון העדכון האוניברסלי
