@@ -409,10 +409,24 @@ class UptodownSource:
     # ---------- Public interface ----------
     def get_latest_version(self, package_name):
         self._log(f"get_latest_version({package_name})")
-        url, version = self._get_uptodown_app(package_name)
-        if url:
-            return version, f"uptodown_direct:{url}", package_name
-        return "latest", f"fallback:{package_name}", package_name
+        
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            self._log(f"--- Attempt {attempt} of {max_retries} for {package_name} ---")
+            
+            url, version = self._get_uptodown_app(package_name)
+            
+            if url:
+                self._log(f"Success on attempt {attempt}!")
+                return version, f"uptodown_direct:{url}", package_name
+            
+            if attempt < max_retries:
+                self._log(f"Attempt {attempt} failed. Waiting 5 seconds before retrying...")
+                time.sleep(5) # המתנה כדי לתת למנוע החיפוש/חומת האש "להירגע" לפני הניסיון הבא
+        
+        # אם הגענו לפה, סימן שכל הניסיונות נכשלו. 
+        # כאן אנחנו חייבים לרסק את התהליך במקום להחזיר "latest", כדי לא להשחית את הנתונים בגיטהאב
+        raise Exception(f"Failed to find URL for {package_name} after {max_retries} attempts. Aborting to prevent version corruption.")
 
     def get_download_url(self, initial_url):
         self._log(f"get_download_url({initial_url})")
