@@ -299,7 +299,6 @@ class UptodownSource:
                     soup_dl = BeautifulSoup(r_dl.text, 'html.parser')
 
             # --- שלב 3: פתרון חינמי לחלוטין באמצעות דפדפן נסתר (Playwright) ---
-            # --- שלב 3: פתרון חינמי לחלוטין באמצעות דפדפן נסתר (Playwright) ---
             self._log("Initiating Playwright (Headless Browser) to bypass Turnstile for FREE...")
             
             try:
@@ -341,6 +340,17 @@ class UptodownSource:
                     self._log(f"Navigating to download page: {r_dl.url}")
                     page.goto(r_dl.url, wait_until="domcontentloaded")
                     
+                    # טיפול בפופ-אפ של העוגיות שעוצר את כל האתר!
+                    try:
+                        self._log("Checking for GDPR Cookie Consent banner...")
+                        cookie_btn = page.locator("#cookiescript_accept")
+                        if cookie_btn.is_visible(timeout=5000):
+                            self._log("Cookie banner found! Clicking 'Accept all'...")
+                            cookie_btn.click()
+                            page.wait_for_timeout(2000)
+                    except Exception:
+                        pass
+                        
                     self._log("Waiting for Cloudflare Turnstile to load and verify...")
                     page.wait_for_timeout(4000)
                     
@@ -354,7 +364,6 @@ class UptodownSource:
                     except Exception:
                         pass 
                         
-                    # שלב קריטי חדש: ממתינים שכפתור ההורדה יהפוך לפעיל (מעיד על עקיפת CF)
                     try:
                         self._log("Waiting for the download button to become 'active'...")
                         page.wait_for_selector("#detail-download-button.active, button.download.active", timeout=15000)
