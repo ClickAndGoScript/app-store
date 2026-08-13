@@ -225,18 +225,22 @@ class UptodownSource:
                 return None, None
 
             # --- שלב 1: כניסה לעמוד הראשי של האפליקציה ---
+           # --- שלב 1: כניסה לעמוד הראשי של האפליקציה ---
             self._log(f"Fetching main app page: {app_url}")
             r_main = self.scraper.get(app_url, timeout=self.timeout)
             
+            # גיבוי חדש נגד חסימות 410/403 בעמוד הראשי!
+            if r_main.status_code in [410, 403]:
+                self._log(f"Got {r_main.status_code} on main page. Trying standard requests fallback...")
+                import requests
+                fallback_headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+                }
+                r_main = requests.get(app_url, headers=fallback_headers, timeout=self.timeout)
+
             if r_main.status_code != 200:
                 self._log(f"CRITICAL: Failed to load main app page! Status {r_main.status_code}")
-                return None, None
-                
-            soup_main = BeautifulSoup(r_main.text, 'html.parser')
-            latest_btn = soup_main.select_one('a.button-download, div.button-download a, button#detail-download-button, a.latest, a[href$="/download"]')
-            
-            if not latest_btn:
-                self._log("CRITICAL: Could not find the 'Get the latest version' button on the main page.")
                 return None, None
                 
             raw_download_link = latest_btn.get('href') or latest_btn.get('data-url')
