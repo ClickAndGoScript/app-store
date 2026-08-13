@@ -299,12 +299,11 @@ class UptodownSource:
                     soup_dl = BeautifulSoup(r_dl.text, 'html.parser')
 
             # --- שלב 3: פתרון חינמי לחלוטין באמצעות דפדפן נסתר (Playwright) ---
+            # --- שלב 3: פתרון חינמי לחלוטין באמצעות דפדפן נסתר (Playwright) ---
             self._log("Initiating Playwright (Headless Browser) to bypass Turnstile for FREE...")
             
             try:
                 from playwright.sync_api import sync_playwright
-                
-                # תמיכה אוטומטית גם בגרסה 2.0+ החדשה וגם בישנות של playwright-stealth
                 try:
                     from playwright_stealth import Stealth
                     use_new_stealth = True
@@ -320,7 +319,6 @@ class UptodownSource:
             intermediate_url = None
 
             try:
-                # מפעילים את הקונטקסט בהתאם לגרסת התוסף
                 if use_new_stealth:
                     playwright_context = Stealth().use_sync(sync_playwright())
                 else:
@@ -337,31 +335,40 @@ class UptodownSource:
                     )
                     page = context.new_page()
                     
-                    # פקודת התמיכה בגרסאות הישנות של התוסף
                     if not use_new_stealth:
                         stealth_sync(page)
                     
                     self._log(f"Navigating to download page: {r_dl.url}")
                     page.goto(r_dl.url, wait_until="domcontentloaded")
                     
-                    self._log("Waiting for Cloudflare Turnstile to load...")
-                    page.wait_for_timeout(3000) # השהייה קצרה לטעינת סקריפטים
+                    self._log("Waiting for Cloudflare Turnstile to load and verify...")
+                    page.wait_for_timeout(4000)
                     
-                    # ניסיון ללחוץ פיזית על ה-CAPTCHA אם היא דורשת וי אינטראקטיבי
                     try:
                         cf_iframe = page.frame_locator('iframe[src*="challenges.cloudflare.com"]').first
                         box = cf_iframe.locator('input[type="checkbox"], .mark, #challenge-stage')
                         if box.is_visible(timeout=3000):
                             self._log("Cloudflare checkbox found! Attempting to click...")
                             box.click()
-                            page.wait_for_timeout(2000)
+                            page.wait_for_timeout(3000)
                     except Exception:
                         pass 
                         
+                    # שלב קריטי חדש: ממתינים שכפתור ההורדה יהפוך לפעיל (מעיד על עקיפת CF)
+                    try:
+                        self._log("Waiting for the download button to become 'active'...")
+                        page.wait_for_selector("#detail-download-button.active, button.download.active", timeout=15000)
+                        self._log("Button is active! CF verification passed.")
+                    except Exception:
+                        self._log("CRITICAL: Cloudflare Turnstile blocked the GitHub Actions server!")
+                        self._log("The button never became active. Uploading blocked page HTML to Termbin...")
+                        self._dump_html(f"cloudflare_block_{package_name}", page.content())
+                        browser.close()
+                        return None, None
+                        
                     self._log("Clicking the Download button and intercepting AJAX request...")
                     
-                    # פה הקסם: אנחנו מחכים שהדפדפן יזהה את בקשת ה-Network שנקראת 'download-url'
-                    with page.expect_response(lambda response: "download-url" in response.url, timeout=20000) as response_info:
+                    with page.expect_response(lambda response: "download-url" in response.url, timeout=15000) as response_info:
                         download_btn = page.locator("#detail-download-button, button.download, button.post-download").first
                         if download_btn.is_visible():
                             download_btn.click()
@@ -380,8 +387,6 @@ class UptodownSource:
                     
             except Exception as e:
                 self._log(f"Playwright encountered an error: {e}")
-                import traceback
-                self._log(traceback.format_exc())
                 return None, None
 
             if not intermediate_url:
