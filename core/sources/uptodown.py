@@ -303,18 +303,30 @@ class UptodownSource:
             
             try:
                 from playwright.sync_api import sync_playwright
-                from playwright_stealth import stealth_sync
+                
+                # תמיכה אוטומטית גם בגרסה 2.0+ החדשה וגם בישנות של playwright-stealth
+                try:
+                    from playwright_stealth import Stealth
+                    use_new_stealth = True
+                except ImportError:
+                    from playwright_stealth import stealth_sync
+                    use_new_stealth = False
             except Exception as e:
                 import traceback
-                self._log("CRITICAL: Playwright IS installed, but crashed during import!")
-                self._log(f"Exact error: {e}")
+                self._log(f"CRITICAL: Playwright/Stealth import error: {e}")
                 self._log(traceback.format_exc())
                 return None, None
 
             intermediate_url = None
 
             try:
-                with sync_playwright() as p:
+                # מפעילים את הקונטקסט בהתאם לגרסת התוסף
+                if use_new_stealth:
+                    playwright_context = Stealth().use_sync(sync_playwright())
+                else:
+                    playwright_context = sync_playwright()
+
+                with playwright_context as p:
                     browser = p.chromium.launch(
                         headless=True,
                         args=["--disable-blink-features=AutomationControlled"]
@@ -325,8 +337,9 @@ class UptodownSource:
                     )
                     page = context.new_page()
                     
-                    # הפעלת מצב Stealth כדי לעבוד על Cloudflare
-                    stealth_sync(page)
+                    # פקודת התמיכה בגרסאות הישנות של התוסף
+                    if not use_new_stealth:
+                        stealth_sync(page)
                     
                     self._log(f"Navigating to download page: {r_dl.url}")
                     page.goto(r_dl.url, wait_until="domcontentloaded")
@@ -347,7 +360,7 @@ class UptodownSource:
                         
                     self._log("Clicking the Download button and intercepting AJAX request...")
                     
-                    # פה הקסם: אנחנו מחכים שהדפדפן יזהה את בקשת ה-Network שנקראת 'download-url' (בדיוק מה שמצאת ידנית)
+                    # פה הקסם: אנחנו מחכים שהדפדפן יזהה את בקשת ה-Network שנקראת 'download-url'
                     with page.expect_response(lambda response: "download-url" in response.url, timeout=20000) as response_info:
                         download_btn = page.locator("#detail-download-button, button.download, button.post-download").first
                         if download_btn.is_visible():
@@ -367,6 +380,8 @@ class UptodownSource:
                     
             except Exception as e:
                 self._log(f"Playwright encountered an error: {e}")
+                import traceback
+                self._log(traceback.format_exc())
                 return None, None
 
             if not intermediate_url:
