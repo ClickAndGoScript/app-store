@@ -1,3 +1,4 @@
+import os
 import re
 import json
 import time
@@ -12,7 +13,6 @@ class UptodownSource:
         self.timeout = timeout
         self.debug = debug
 
-        # שינינו ל-Chrome מודרני כדי לחמוק מחסימות 410
         self.scraper = cloudscraper.create_scraper(
             browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
         )
@@ -20,15 +20,12 @@ class UptodownSource:
             "Accept-Language": "en-US,en;q=0.9",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         })
-        # === התיקון שלנו (שורה אחת!) ===
-        # מונע מ-downloader.py לדרוס את ה-Headers של ה-scraper עם DEFAULT_HEADERS בעייתיים
         self.headers = {}
     
     def _log(self, *args, **kwargs):
         if self.debug:
             print("[DEBUG]", *args, **kwargs)
 
-    # פונקציית עזר להעלאת ה-HTML לשרת Termbin
     def _dump_html(self, step_name, html_content):
         if not self.debug:
             return
@@ -144,7 +141,6 @@ class UptodownSource:
             if self.uptodown_subdomain:
                 app_url = f"https://{self.uptodown_subdomain}.en.uptodown.com/android"
             else:
-                # 1. ניסיון ניחוש אוניברסלי לפי Package Name
                 parts = package_name.split('.')
                 query_parts = [p for p in parts if p.lower() not in ('com', 'org', 'net', 'co', 'io', 'gov', 'android', 'app', 'mobile')]
                 
@@ -161,8 +157,6 @@ class UptodownSource:
                         self._log(f"Trying direct URL guess: {direct_url}")
                         try:
                             r_dir = self.scraper.get(direct_url, timeout=self.timeout)
-                            self._log(f"Direct URL status: {r_dir.status_code}")
-                            
                             if r_dir.status_code == 200:
                                 if 'detail-app-name' in r_dir.text or re.search(r'\b' + re.escape(package_name) + r'\b', r_dir.text):
                                     app_url = direct_url
@@ -173,89 +167,58 @@ class UptodownSource:
                         
                         if app_url: break
                 
-                # 2. חיפוש דרך מנוע החיפוש הפנימי
                 if not app_url:
                     search_query_escaped = urllib.parse.quote_plus(package_name)
                     search_url = f"https://en.uptodown.com/android/search?q={search_query_escaped}"
                     
                     self._log(f"Search URL: {search_url}")
                     r_search = self.scraper.get(search_url, timeout=self.timeout)
-                    self._log(f"Search URL status: {r_search.status_code}")
                     
                     if r_search.status_code == 200:
-                        self._dump_html(f"uptodown_search_{package_name}", r_search.text)
-                        
                         m_redirect = re.search(r'^(https://[a-z0-9-]+\.en\.uptodown\.com/android)', r_search.url)
                         if r_search.url != search_url and m_redirect:
                             app_url = m_redirect.group(1)
-                            self._log(f"Search auto-redirected directly to: {app_url}")
                         else:
                             soup_search = BeautifulSoup(r_search.text, 'html.parser')
                             for item in soup_search.select('.item .name a, a.app-link'):
                                 href = item.get('href', '')
                                 if href and 'uptodown-android' not in href:
                                     app_url = href.split('/download')[0]
-                                    self._log(f"Found app via search selector: {app_url}")
                                     break
-                    else:
-                        self._log("Internal search page blocked. Moving to external search fallback.")
 
-                # 3. גיבוי אוניברסלי 1: Bing
                 if not app_url:
                     self._log("Trying external generic search engine (Bing)...")
                     try:
                         query = f'site:en.uptodown.com/android "{package_name}"'
                         bing_url = f"https://www.bing.com/search?q={urllib.parse.quote_plus(query)}"
-                        
-                        headers = {
-                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                            "Accept-Language": "en-US,en;q=0.9"
-                        }
+                        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
                         r_bing = self.scraper.get(bing_url, headers=headers, timeout=self.timeout)
-                        self._log(f"Bing status: {r_bing.status_code}")
-                        
                         if r_bing.status_code == 200:
-                            self._dump_html(f"bing_{package_name}", r_bing.text)
-                            
                             decoded_text = urllib.parse.unquote(r_bing.text)
                             matches = re.findall(r'(https://[a-z0-9-]+\.en\.uptodown\.com/android)', decoded_text)
-                            
                             for match in matches:
                                 if 'uptodown-android' not in match:
                                     app_url = match
-                                    self._log(f"Found app via Bing search: {app_url}")
                                     break
                     except Exception as e:
-                        self._log(f"Bing search error: {e}")
+                        pass
 
-                # 4. גיבוי אוניברסלי 2: Yahoo
                 if not app_url:
                     self._log("Trying external generic search engine (Yahoo)...")
                     try:
                         query = f'site:en.uptodown.com/android "{package_name}"'
                         yahoo_url = f"https://search.yahoo.com/search?p={urllib.parse.quote_plus(query)}"
-                        
-                        headers = {
-                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                            "Accept-Language": "en-US,en;q=0.9"
-                        }
-                        
+                        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
                         r_yahoo = self.scraper.get(yahoo_url, headers=headers, timeout=self.timeout)
-                        self._log(f"Yahoo status: {r_yahoo.status_code}")
-                        
                         if r_yahoo.status_code == 200:
-                            self._dump_html(f"yahoo_{package_name}", r_yahoo.text)
-                            
                             decoded_text = urllib.parse.unquote(r_yahoo.text)
                             matches = re.findall(r'(https://[a-z0-9-]+\.en\.uptodown\.com/android)', decoded_text)
-                            
                             for match in matches:
                                 if 'uptodown-android' not in match:
                                     app_url = match
-                                    self._log(f"Found app via Yahoo search: {app_url}")
                                     break
                     except Exception as e:
-                        self._log(f"Yahoo search error: {e}")
+                        pass
 
             if not app_url:
                 self._log("Could not determine app URL after all fallback attempts.")
@@ -269,9 +232,7 @@ class UptodownSource:
                 self._log(f"CRITICAL: Failed to load main app page! Status {r_main.status_code}")
                 return None, None
                 
-            self._dump_html(f"main_page_{package_name}", r_main.text)
             soup_main = BeautifulSoup(r_main.text, 'html.parser')
-            
             latest_btn = soup_main.select_one('a.button-download, div.button-download a, button#detail-download-button, a.latest, a[href$="/download"]')
             
             if not latest_btn:
@@ -279,41 +240,26 @@ class UptodownSource:
                 return None, None
                 
             raw_download_link = latest_btn.get('href') or latest_btn.get('data-url')
-            if not raw_download_link:
-                self._log("CRITICAL: Found the button but it has no link attached.")
-                return None, None
-            
-            # בניית כתובת מלאה ובטוחה לעמוד ההורדה
-            base_url = r_main.url if r_main.url.endswith('/') else r_main.url + '/'
-            download_page_url = urllib.parse.urljoin(base_url, raw_download_link)
-            self._log(f"Successfully extracted exact download page URL: {download_page_url}")
+            download_page_url = urllib.parse.urljoin(r_main.url, raw_download_link)
             
             # --- המתנה קריטית לעקיפת 410 ---
-            # חומת האש חוסמת בוטים שעוברים עמודים ללא המתנה (0 מילישניות). נדמה בן אדם!
             time.sleep(2)
             
             # --- שלב 2: כניסה לעמוד ההורדה ---
             self.scraper.headers.update({"Referer": r_main.url})
             r_dl = self.scraper.get(download_page_url, timeout=self.timeout)
             
-            # נשק יום הדין למקרה של 410/403 על עמוד ההורדה
             if r_dl.status_code in [410, 403]:
                 self._log(f"Got {r_dl.status_code} on download page. Trying standard requests fallback...")
                 import requests
-                fallback_headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                    "Referer": r_main.url
-                }
+                fallback_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Referer": r_main.url}
                 r_dl = requests.get(download_page_url, headers=fallback_headers, timeout=self.timeout)
             
             if r_dl.status_code != 200:
                 self._log(f"CRITICAL: Failed to load specific download page! Status {r_dl.status_code}")
                 return None, None
                 
-            self._dump_html(f"download_page_{package_name}", r_dl.text)
             soup_dl = BeautifulSoup(r_dl.text, 'html.parser')
-            
             name_el = soup_dl.select_one('#detail-app-name')
             default_file_id = name_el.get('data-file-id') if name_el else None
             target_file_id = default_file_id
@@ -328,73 +274,112 @@ class UptodownSource:
                     data_version = variants_btn.get('data-version')
                     data_code_match = re.search(r'data-code="(\d+)"', r_dl.text)
                     if data_code_match and data_version:
-                        data_code = data_code_match.group(1)
                         domain = app_url.split('//')[1].split('/')[0]
-                        variants_url = f"https://{domain}/app/{data_code}/version/{data_version}/files"
-                        
+                        variants_url = f"https://{domain}/app/{data_code_match.group(1)}/version/{data_version}/files"
                         try:
                             time.sleep(1)
-                            self.scraper.headers.update({"Referer": r_dl.url})
                             r_var = self.scraper.get(variants_url, timeout=self.timeout)
                             if r_var.status_code == 200:
-                                self._dump_html(f"variants_{package_name}", r_var.text)
-                                var_json = r_var.json()
-                                var_soup = BeautifulSoup(var_json.get('content', ''), 'html.parser')
+                                var_soup = BeautifulSoup(r_var.json().get('content', ''), 'html.parser')
                                 for variant in var_soup.select('div.variant'):
                                     v_format_el = variant.select_one('div.v-file span')
-                                    v_format = v_format_el.get_text(strip=True).upper() if v_format_el else ""
-                                    if "APK" in v_format and "XAPK" not in v_format:
+                                    if v_format_el and "APK" in v_format_el.get_text().upper():
                                         report_el = variant.select_one('.v-report')
                                         if report_el:
                                             target_file_id = report_el.get('data-file-id')
-                                            self._log(f"Found pure APK variant (ID: {target_file_id})")
                                             break
                         except Exception:
                             pass
 
             if target_file_id and target_file_id != default_file_id:
                 current_download_page = f"{app_url}/download/{target_file_id}"
-                self._log(f"Fetching specific variant download page: {current_download_page}")
-                
-                time.sleep(1)
                 self.scraper.headers.update({"Referer": r_dl.url})
-                r_dl_var = self.scraper.get(current_download_page, timeout=self.timeout)
-                
-                if r_dl_var.status_code in [410, 403]:
-                    import requests
-                    r_dl_var = requests.get(current_download_page, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Referer": r_dl.url}, timeout=self.timeout)
+                r_dl = self.scraper.get(current_download_page, timeout=self.timeout)
+                if r_dl.status_code == 200:
+                    soup_dl = BeautifulSoup(r_dl.text, 'html.parser')
 
-                if r_dl_var.status_code == 200:
-                    self._dump_html(f"specific_variant_{package_name}", r_dl_var.text)
-                    soup_dl = BeautifulSoup(r_dl_var.text, 'html.parser')
-                else:
-                    self._log(f"Failed to load variant page (Status {r_dl_var.status_code}). Proceeding with default.")
+            # --- שלב 3: פתרון חינמי לחלוטין באמצעות דפדפן נסתר (Playwright) ---
+            self._log("Initiating Playwright (Headless Browser) to bypass Turnstile for FREE...")
+            
+            try:
+                from playwright.sync_api import sync_playwright
+                from playwright_stealth import stealth_sync
+            except ImportError:
+                self._log("CRITICAL: playwright and playwright-stealth are not installed.")
+                self._log("Please run: pip install playwright playwright-stealth && playwright install chromium")
+                return None, None
 
-            # --- שלב 3: חילוץ טוקן ההורדה והרכבת הכתובת הסופית ---
-            download_button = soup_dl.select_one('#detail-download-button')
-            final_token = download_button.get('data-url') if download_button else None
-            
-            if not final_token:
-                if download_button and download_button.has_attr('href'):
-                     final_token = download_button.get('href')
-                else:
-                    self._log("CRITICAL: Failed to find download token or link in button!")
-                    return None, None
-            
-            final_token = final_token.strip('/')
-            
-            if final_token.startswith('dwn/'):
-                final_token = final_token[4:]
+            intermediate_url = None
+
+            try:
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(
+                        headless=True,
+                        args=["--disable-blink-features=AutomationControlled"]
+                    )
+                    context = browser.new_context(
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        viewport={"width": 1920, "height": 1080}
+                    )
+                    page = context.new_page()
+                    
+                    # הפעלת מצב Stealth כדי לעבוד על Cloudflare
+                    stealth_sync(page)
+                    
+                    self._log(f"Navigating to download page: {r_dl.url}")
+                    page.goto(r_dl.url, wait_until="domcontentloaded")
+                    
+                    self._log("Waiting for Cloudflare Turnstile to load...")
+                    page.wait_for_timeout(3000) # השהייה קצרה לטעינת סקריפטים
+                    
+                    # ניסיון ללחוץ פיזית על ה-CAPTCHA אם היא דורשת וי אינטראקטיבי
+                    try:
+                        cf_iframe = page.frame_locator('iframe[src*="challenges.cloudflare.com"]').first
+                        box = cf_iframe.locator('input[type="checkbox"], .mark, #challenge-stage')
+                        if box.is_visible(timeout=3000):
+                            self._log("Cloudflare checkbox found! Attempting to click...")
+                            box.click()
+                            page.wait_for_timeout(2000)
+                    except Exception:
+                        pass 
+                        
+                    self._log("Clicking the Download button and intercepting AJAX request...")
+                    
+                    # פה הקסם: אנחנו מחכים שהדפדפן יזהה את בקשת ה-Network שנקראת 'download-url' (בדיוק מה שמצאת ידנית)
+                    with page.expect_response(lambda response: "download-url" in response.url, timeout=20000) as response_info:
+                        download_btn = page.locator("#detail-download-button, button.download, button.post-download").first
+                        if download_btn.is_visible():
+                            download_btn.click()
+                        else:
+                            page.evaluate('document.getElementById("detail-download-button").click()')
+                            
+                    ajax_response = response_info.value
+                    if ajax_response.status == 200:
+                        json_data = ajax_response.json()
+                        intermediate_url = json_data.get('url') or json_data.get('data')
+                        self._log(f"Intercepted intermediate URL from AJAX: {intermediate_url}")
+                    else:
+                        self._log(f"AJAX request failed with status: {ajax_response.status}")
+                        
+                    browser.close()
+                    
+            except Exception as e:
+                self._log(f"Playwright encountered an error: {e}")
+                return None, None
+
+            if not intermediate_url:
+                self._log("CRITICAL: Failed to get the URL via Playwright.")
+                return None, None
                 
-            if final_token.startswith('http'):
-                download_url = final_token
+            # 4. עקיפת ה-Redirect (302) כדי לקבל את לינק ה-APK הסופי ללא הורדתו עדיין
+            self.scraper.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"})
+            r_final = self.scraper.head(intermediate_url, allow_redirects=False, timeout=self.timeout)
+            
+            if r_final.status_code in [301, 302, 303, 307]:
+                download_url = r_final.headers.get('Location')
             else:
-                # הרכבת הקישור לשרתי uptodown.net (על בסיס התמונה מה-IDM שלך)
-                download_url = f"https://dw.uptodown.net/dwn/{final_token}"
-            
-            if not download_url.endswith('.apk'):
-                download_url = f"{download_url.rstrip('/')}/app.apk"
-            
+                download_url = intermediate_url
+                
             version_name = self._get_real_version(soup_dl, download_url)
 
             self._log(f"Final version: {version_name}")
@@ -422,11 +407,9 @@ class UptodownSource:
             
             if attempt < max_retries:
                 self._log(f"Attempt {attempt} failed. Waiting 5 seconds before retrying...")
-                time.sleep(5) # המתנה כדי לתת למנוע החיפוש/חומת האש "להירגע" לפני הניסיון הבא
+                time.sleep(5)
         
-        # אם הגענו לפה, סימן שכל הניסיונות נכשלו. 
-        # כאן אנחנו חייבים לרסק את התהליך במקום להחזיר "latest", כדי לא להשחית את הנתונים בגיטהאב
-        raise Exception(f"Failed to find URL for {package_name} after {max_retries} attempts. Aborting to prevent version corruption.")
+        raise Exception(f"Failed to find URL for {package_name} after {max_retries} attempts.")
 
     def get_download_url(self, initial_url):
         self._log(f"get_download_url({initial_url})")
