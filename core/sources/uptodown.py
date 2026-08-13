@@ -169,7 +169,7 @@ class UptodownSource:
                 
                 if not app_url:
                     search_query_escaped = urllib.parse.quote_plus(package_name)
-                    search_url = f"https://en.uptodown.com/android/search?q={search_query_escaped}"
+                    search_url = f"                                         {search_query_escaped}"
                     
                     self._log(f"Search URL: {search_url}")
                     r_search = self.scraper.get(search_url, timeout=self.timeout)
@@ -207,7 +207,7 @@ class UptodownSource:
                     self._log("Trying external generic search engine (Yahoo)...")
                     try:
                         query = f'site:en.uptodown.com/android "{package_name}"'
-                        yahoo_url = f"https://search.yahoo.com/search?p={urllib.parse.quote_plus(query)}"
+                        yahoo_url = f"                                  {urllib.parse.quote_plus(query)}"
                         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
                         r_yahoo = self.scraper.get(yahoo_url, headers=headers, timeout=self.timeout)
                         if r_yahoo.status_code == 200:
@@ -225,22 +225,18 @@ class UptodownSource:
                 return None, None
 
             # --- שלב 1: כניסה לעמוד הראשי של האפליקציה ---
-           # --- שלב 1: כניסה לעמוד הראשי של האפליקציה ---
             self._log(f"Fetching main app page: {app_url}")
             r_main = self.scraper.get(app_url, timeout=self.timeout)
             
-            # גיבוי חדש נגד חסימות 410/403 בעמוד הראשי!
-            if r_main.status_code in [410, 403]:
-                self._log(f"Got {r_main.status_code} on main page. Trying standard requests fallback...")
-                import requests
-                fallback_headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-                }
-                r_main = requests.get(app_url, headers=fallback_headers, timeout=self.timeout)
-
             if r_main.status_code != 200:
                 self._log(f"CRITICAL: Failed to load main app page! Status {r_main.status_code}")
+                return None, None
+                
+            soup_main = BeautifulSoup(r_main.text, 'html.parser')
+            latest_btn = soup_main.select_one('a.button-download, div.button-download a, button#detail-download-button, a.latest, a[href$="/download"]')
+            
+            if not latest_btn:
+                self._log("CRITICAL: Could not find the 'Get the latest version' button on the main page.")
                 return None, None
                 
             raw_download_link = latest_btn.get('href') or latest_btn.get('data-url')
@@ -303,6 +299,7 @@ class UptodownSource:
                     soup_dl = BeautifulSoup(r_dl.text, 'html.parser')
 
             # --- שלב 3: פתרון חינמי לחלוטין באמצעות דפדפן נסתר (Playwright) ---
+            # --- שלב 3: פתרון חינמי לחלוטין באמצעות דפדפן נסתר (Playwright) ---
             self._log("Initiating Playwright (Headless Browser) to bypass Turnstile for FREE...")
             
             try:
@@ -344,17 +341,6 @@ class UptodownSource:
                     self._log(f"Navigating to download page: {r_dl.url}")
                     page.goto(r_dl.url, wait_until="domcontentloaded")
                     
-                    # טיפול בפופ-אפ של העוגיות שעוצר את כל האתר!
-                    try:
-                        self._log("Checking for GDPR Cookie Consent banner...")
-                        cookie_btn = page.locator("#cookiescript_accept")
-                        if cookie_btn.is_visible(timeout=5000):
-                            self._log("Cookie banner found! Clicking 'Accept all'...")
-                            cookie_btn.click()
-                            page.wait_for_timeout(2000)
-                    except Exception:
-                        pass
-                        
                     self._log("Waiting for Cloudflare Turnstile to load and verify...")
                     page.wait_for_timeout(4000)
                     
@@ -368,6 +354,7 @@ class UptodownSource:
                     except Exception:
                         pass 
                         
+                    # שלב קריטי חדש: ממתינים שכפתור ההורדה יהפוך לפעיל (מעיד על עקיפת CF)
                     try:
                         self._log("Waiting for the download button to become 'active'...")
                         page.wait_for_selector("#detail-download-button.active, button.download.active", timeout=15000)
