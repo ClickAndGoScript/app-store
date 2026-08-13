@@ -304,9 +304,11 @@ class UptodownSource:
             try:
                 from playwright.sync_api import sync_playwright
                 from playwright_stealth import stealth_sync
-            except ImportError:
-                self._log("CRITICAL: playwright and playwright-stealth are not installed.")
-                self._log("Please run: pip install playwright playwright-stealth && playwright install chromium")
+            except Exception as e:
+                import traceback
+                self._log("CRITICAL: Playwright IS installed, but crashed during import!")
+                self._log(f"Exact error: {e}")
+                self._log(traceback.format_exc())
                 return None, None
 
             intermediate_url = None
