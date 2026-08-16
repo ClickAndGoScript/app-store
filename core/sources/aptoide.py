@@ -39,6 +39,10 @@ class AptoideSource:
             print(f"[-] [Aptoide] Error fetching metadata: {e}")
             return None, None, None
 
+    def get_download_url(self, initial_url: str):
+        """Aptoide provides the direct link in the metadata, so this is just a passthrough."""
+        return initial_url
+
 def is_newer_version(local_ver: str, remote_ver: str) -> bool:
     """משווה בצורה חכמה בין גרסאות כדי למנוע Downgrade"""
     try:
