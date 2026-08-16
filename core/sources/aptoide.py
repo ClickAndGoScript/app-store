@@ -1,8 +1,4 @@
-import os
 import requests
-import subprocess
-import zipfile
-import shutil
 
 class AptoideSource:
     def __init__(self, timeout: int = 10):
@@ -40,153 +36,31 @@ class AptoideSource:
             return None, None, None
 
     def get_download_url(self, initial_url: str):
-        """Aptoide provides the direct link in the metadata, so this is just a passthrough."""
-        return initial_url
-
-def is_newer_version(local_ver: str, remote_ver: str) -> bool:
-    """משווה בצורה חכמה בין גרסאות כדי למנוע Downgrade"""
-    try:
-        # חילוץ מספרים בלבד מתוך מחרוזת הגרסה
-        local_parts = [int(x) for x in local_ver.split('.') if x.isdigit()]
-        remote_parts = [int(x) for x in remote_ver.split('.') if x.isdigit()]
-        return tuple(remote_parts) > tuple(local_parts)
-    except Exception:
-        # גיבוי למקרה שיש פורמט גרסה מוזר
-        return remote_ver != local_ver
-
-def debug_inspect_downloaded_file(file_path: str):
-    """פונקציית חקירה: מציצה לתוך הקובץ שירד ומדפיסה מה יש בו"""
-    print(f"\n================ [ DEBUG: FILE INSPECTION ] ================")
-    if not os.path.exists(file_path):
-        print(f"[-] File not found: {file_path}")
-        return
-        
-    size_mb = os.path.getsize(file_path) / (1024 * 1024)
-    print(f"[*] File: {file_path}")
-    print(f"[*] Size: {size_mb:.2f} MB")
-    
-    if zipfile.is_zipfile(file_path):
-        print("[+] File is a valid ZIP archive.")
+        """
+        Aptoide provides the direct link, but before passing it to the downloader,
+        we inspect the server headers to see what file we are actually getting.
+        """
+        print(f"\n================ [ DEBUG: SERVER URL INSPECTION ] ================")
         try:
-            with zipfile.ZipFile(file_path, 'r') as z:
-                file_list = z.namelist()
-                print(f"[*] Total files in archive: {len(file_list)}")
+            # בקשת "הצצה" לשרת שקוראת רק את ההדרים (Headers) בלי להוריד את התוכן
+            with requests.get(initial_url, stream=True, timeout=self.timeout) as r:
+                content_length = r.headers.get('Content-Length', '0')
+                content_disp = r.headers.get('Content-Disposition', 'None')
                 
-                # אבחון סוג הקובץ האמיתי
-                if "BundleConfig.pb" in file_list:
-                    print("[!] DIAGNOSIS: This is an App Bundle (AAB)!")
-                elif "base.apk" in file_list:
-                    print("[!] DIAGNOSIS: This is an APKS/XAPK (Split APKs zip)!")
+                size_mb = int(content_length) / (1024 * 1024) if content_length.isdigit() else 0
+                
+                print(f"[*] True Download URL: {r.url}")
+                print(f"[*] Expected File Size: {size_mb:.2f} MB")
+                print(f"[*] Content-Disposition: {content_disp}")
+                
+                if ".aab" in r.url or ".aab" in content_disp:
+                    print("[!] DIAGNOSIS: The server is sending an App Bundle (.aab)")
+                elif ".apks" in r.url or ".apks" in content_disp:
+                    print("[!] DIAGNOSIS: The server is sending a Split APK Archive (.apks)")
                 else:
-                    print("[!] DIAGNOSIS: This looks like a standard APK (or a single split).")
-                
-                # הדפסת התיקיות/הקבצים הראשיים
-                top_level = set([f.split('/')[0] for f in file_list])
-                print(f"[*] Top-level contents: {', '.join(list(top_level)[:15])}")
-                
+                    print("[!] DIAGNOSIS: The server is sending an APK (Could be a base.apk or monolithic)")
         except Exception as e:
-            print(f"[-] Error reading ZIP: {e}")
-    else:
-        print("[-] File is NOT a ZIP archive!")
-    print("============================================================\n")
-
-def convert_aab_to_apk(aab_path: str, output_apk_path: str):
-    """ממיר קובץ AAB לקובץ APK אוניברסלי בעזרת bundletool"""
-    bundletool_path = "bundletool.jar"
-    
-    if not os.path.exists(bundletool_path):
-        print("[-] [Error] bundletool.jar not found! Please download it and place it in the same folder.")
-        return False
-
-    apks_path = "temp_output.apks"
-    print(f"[*] Converting {aab_path} to universal APK using bundletool...")
-
-    # הרצת פקודת bundletool
-    cmd = [
-        "java", "-jar", bundletool_path,
-        "build-apks",
-        f"--bundle={aab_path}",
-        f"--output={apks_path}",
-        "--mode=universal"
-    ]
-    
-    try:
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except subprocess.CalledProcessError as e:
-        print(f"[-] [Error] bundletool failed: {e.stderr.decode()}")
-        return False
-
-    # חילוץ קובץ ה-APK האוניברסלי מתוך ארכיון ה-APKS (שהוא בעצם קובץ ZIP)
-    print("[*] Extracting universal.apk...")
-    try:
-        with zipfile.ZipFile(apks_path, 'r') as zip_ref:
-            zip_ref.extract("universal.apk", ".")
-            
-        # שינוי שם לקובץ הרצוי
-        if os.path.exists(output_apk_path):
-            os.remove(output_apk_path)
-        os.rename("universal.apk", output_apk_path)
+            print(f"[-] Could not inspect URL: {e}")
+        print("==================================================================\n")
         
-        # ניקוי קבצים זמניים
-        os.remove(apks_path)
-        os.remove(aab_path) # מוחק את ה-AAB המקורי אחרי שהמרנו אותו
-        
-        print(f"[+] Successfully generated: {output_apk_path}")
-        return True
-    except Exception as e:
-        print(f"[-] [Error] Failed to extract APK: {e}")
-        return False
-
-def main():
-    package_name = "com.spotify.music"
-    local_version = "9.1.70.1902.1"
-    
-    aptoide = AptoideSource()
-    version, download_url, title = aptoide.get_latest_version(package_name)
-    
-    if not version or not download_url:
-        print("[-] Could not fetch details.")
-        return
-
-    print(f"[*] [Spotify] Local version: {local_version}")
-    print(f"[*] [Spotify] Remote version: {version}")
-    print(f"[*] [Spotify] Download URL: {download_url}")
-
-    if is_newer_version(local_version, version):
-        print(f"[!] [Spotify] Update detected! ({local_version} -> {version})")
-        
-        # קביעת סוג הקובץ לפי כתובת ההורדה
-        ext = ".aab" if download_url.endswith(".aab") else ".apk"
-        downloaded_file = f"downloaded_spotify{ext}"
-        final_file = "spotify_latest.apk"
-
-        print(f"[*] Downloading {ext} file...")
-        # הורדת הקובץ
-        with requests.get(download_url, stream=True) as r:
-            r.raise_for_status()
-            with open(downloaded_file, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192): 
-                    f.write(chunk)
-        
-        print(f"[+] Download complete: {downloaded_file}")
-
-        # === קריאה לפונקציית החקירה החדשה שהוספנו ===
-        debug_inspect_downloaded_file(downloaded_file)
-        # ============================================
-
-        # אם ירד קובץ AAB, נבצע לו המרה ל-APK
-        if ext == ".aab":
-            convert_aab_to_apk(downloaded_file, final_file)
-        else:
-            # אם ירד APK מלכתחילה, פשוט נשנה לו את השם
-            os.rename(downloaded_file, final_file)
-            print(f"[+] File is already an APK. Saved as {final_file}")
-
-    else:
-        print(f"[*] [Spotify] App is up to date (or remote version is older). No download needed.")
-
-if __name__ == "__main__":
-    print("============================================================")
-    print("  Testing Spotify Download with App Bundle Support")
-    print("============================================================")
-    main()
+        return initial_url
