@@ -6,11 +6,12 @@ class AptoideSource:
         self.base_url = "https://ws2.aptoide.com/api/7/app/getMeta"
 
     def get_latest_version(self, package_name: str):
+        import json # <--- הוספנו את זה בשביל ההדפסה
         print(f"[*] [Aptoide] Fetching metadata for: {package_name}")
         params = {
             "package_name": package_name,
             "language": "en",
-            "aab": True  # <--- הוספנו תמיכה ב-App Bundles
+            "aab": True
         }
         
         try:
@@ -24,6 +25,14 @@ class AptoideSource:
             
             app_data = data.get("data", {})
             file_data = app_data.get("file", {})
+            
+            # ==========================================
+            # קוד דיבוג: בוא נראה מה עוד Aptoide מחזיר
+            # ==========================================
+            print("\n================ [ DEBUG: APTOIDE API JSON ] ================")
+            # מדפיס את כל המידע על הקובץ, כדי שנראה אם יש פה מערך של "splits"
+            print(json.dumps(file_data, indent=2))
+            print("=============================================================\n")
             
             version = file_data.get("vername")
             download_url = file_data.get("path") or file_data.get("path_alt")
