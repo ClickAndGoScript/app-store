@@ -113,18 +113,21 @@ def patch(decompiled_dir: str) -> bool:
             if new_content != content:
                 with open(file_path, 'w', encoding='utf-8') as f: f.write(new_content)
                 print("[+] Patched VideoSurfaceView")
-       # =========================================================================
+
+    # =========================================================================
     # חלק 1.5: ביטול תמונת האלבום בנגן ההתראות (MediaMetadataCompat) - חובה
     # =========================================================================
     print("\n[*] Disabling notification album art (mandatory)...")
     builder_re = re.compile(
         r'new-instance\s+[vp]\d+,\s+Landroid/support/v4/media/MediaMetadataCompat;'
     )
-    # regex משופר – מרשה שורות .line / ריקות בין const-string ל-invoke
+    
+    # regex משופר - במקום לחפש מתודה בשם 'e', הוא מחפש כל מתודה דינמית
+    # כך הוא חסין לשינויים ב-obfuscation שקורים בגרסאות חדשות.
     art_uri_invoke_re = re.compile(
         r'(const-string\s+[vp]\d+,\s*"android\.media\.metadata\.ALBUM_ART_URI"\s*\n)'
         r'(?:[ \t]*(?:\.[^\n]*)?\n)*'
-        r'\s*(invoke-virtual\s+\{[^}]+\},\s*L[^;]+;->e\(Ljava/lang/String;Ljava/lang/String;\)V)',
+        r'\s*(invoke-virtual\s+\{[^}]+\},\s*L[^;]+;->[a-zA-Z0-9_$]+\([^)]*\)[^\s]+)',
         re.MULTILINE
     )
 
@@ -182,6 +185,7 @@ def patch(decompiled_dir: str) -> bool:
     with open(target_path, 'w', encoding='utf-8') as f:
         f.write(new_content)
     print(f"[+] Notification album art disabled successfully in {target_path}")
+
     # =========================================================================
     # חלק 2: הזרקת מנגנון העדכון האוניברסלי
     # =========================================================================
