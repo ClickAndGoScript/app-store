@@ -54,6 +54,42 @@ def is_newer_version(local_ver: str, remote_ver: str) -> bool:
         # גיבוי למקרה שיש פורמט גרסה מוזר
         return remote_ver != local_ver
 
+def debug_inspect_downloaded_file(file_path: str):
+    """פונקציית חקירה: מציצה לתוך הקובץ שירד ומדפיסה מה יש בו"""
+    print(f"\n================ [ DEBUG: FILE INSPECTION ] ================")
+    if not os.path.exists(file_path):
+        print(f"[-] File not found: {file_path}")
+        return
+        
+    size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    print(f"[*] File: {file_path}")
+    print(f"[*] Size: {size_mb:.2f} MB")
+    
+    if zipfile.is_zipfile(file_path):
+        print("[+] File is a valid ZIP archive.")
+        try:
+            with zipfile.ZipFile(file_path, 'r') as z:
+                file_list = z.namelist()
+                print(f"[*] Total files in archive: {len(file_list)}")
+                
+                # אבחון סוג הקובץ האמיתי
+                if "BundleConfig.pb" in file_list:
+                    print("[!] DIAGNOSIS: This is an App Bundle (AAB)!")
+                elif "base.apk" in file_list:
+                    print("[!] DIAGNOSIS: This is an APKS/XAPK (Split APKs zip)!")
+                else:
+                    print("[!] DIAGNOSIS: This looks like a standard APK (or a single split).")
+                
+                # הדפסת התיקיות/הקבצים הראשיים
+                top_level = set([f.split('/')[0] for f in file_list])
+                print(f"[*] Top-level contents: {', '.join(list(top_level)[:15])}")
+                
+        except Exception as e:
+            print(f"[-] Error reading ZIP: {e}")
+    else:
+        print("[-] File is NOT a ZIP archive!")
+    print("============================================================\n")
+
 def convert_aab_to_apk(aab_path: str, output_apk_path: str):
     """ממיר קובץ AAB לקובץ APK אוניברסלי בעזרת bundletool"""
     bundletool_path = "bundletool.jar"
@@ -133,6 +169,10 @@ def main():
                     f.write(chunk)
         
         print(f"[+] Download complete: {downloaded_file}")
+
+        # === קריאה לפונקציית החקירה החדשה שהוספנו ===
+        debug_inspect_downloaded_file(downloaded_file)
+        # ============================================
 
         # אם ירד קובץ AAB, נבצע לו המרה ל-APK
         if ext == ".aab":
