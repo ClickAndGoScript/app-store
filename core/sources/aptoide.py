@@ -6,12 +6,16 @@ class AptoideSource:
         self.base_url = "https://ws2.aptoide.com/api/7/app/getMeta"
 
     def get_latest_version(self, package_name: str):
-        import json # <--- הוספנו את זה בשביל ההדפסה
+        """
+        Fetch metadata from Aptoide API.
+        
+        Returns:
+            (version, download_link, title)
+        """
         print(f"[*] [Aptoide] Fetching metadata for: {package_name}")
         params = {
             "package_name": package_name,
-            "language": "en",
-            "aab": True
+            "language": "en"
         }
         
         try:
@@ -26,15 +30,8 @@ class AptoideSource:
             app_data = data.get("data", {})
             file_data = app_data.get("file", {})
             
-            # ==========================================
-            # קוד דיבוג: בוא נראה מה עוד Aptoide מחזיר
-            # ==========================================
-            print("\n================ [ DEBUG: APTOIDE API JSON ] ================")
-            # מדפיס את כל המידע על הקובץ, כדי שנראה אם יש פה מערך של "splits"
-            print(json.dumps(file_data, indent=2))
-            print("=============================================================\n")
-            
             version = file_data.get("vername")
+            # Prefer 'path', fallback to 'path_alt'
             download_url = file_data.get("path") or file_data.get("path_alt")
             title = app_data.get("name", package_name)
             
@@ -45,31 +42,5 @@ class AptoideSource:
             return None, None, None
 
     def get_download_url(self, initial_url: str):
-        """
-        Aptoide provides the direct link, but before passing it to the downloader,
-        we inspect the server headers to see what file we are actually getting.
-        """
-        print(f"\n================ [ DEBUG: SERVER URL INSPECTION ] ================")
-        try:
-            # בקשת "הצצה" לשרת שקוראת רק את ההדרים (Headers) בלי להוריד את התוכן
-            with requests.get(initial_url, stream=True, timeout=self.timeout) as r:
-                content_length = r.headers.get('Content-Length', '0')
-                content_disp = r.headers.get('Content-Disposition', 'None')
-                
-                size_mb = int(content_length) / (1024 * 1024) if content_length.isdigit() else 0
-                
-                print(f"[*] True Download URL: {r.url}")
-                print(f"[*] Expected File Size: {size_mb:.2f} MB")
-                print(f"[*] Content-Disposition: {content_disp}")
-                
-                if ".aab" in r.url or ".aab" in content_disp:
-                    print("[!] DIAGNOSIS: The server is sending an App Bundle (.aab)")
-                elif ".apks" in r.url or ".apks" in content_disp:
-                    print("[!] DIAGNOSIS: The server is sending a Split APK Archive (.apks)")
-                else:
-                    print("[!] DIAGNOSIS: The server is sending an APK (Could be a base.apk or monolithic)")
-        except Exception as e:
-            print(f"[-] Could not inspect URL: {e}")
-        print("==================================================================\n")
-        
+        """Aptoide provides the direct link in the metadata, so this is just a passthrough."""
         return initial_url
