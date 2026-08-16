@@ -1,1 +1,1 @@
-{"success": false, "failed_version": "unknown", "error_message": "[Spotify: Music and Podcasts] Error during download process: 'AptoideSource' object has no attribute 'get_download_url'", "updated_at": "Sun Aug 16 19:52:15 UTC 2026"}
+{"success": false, "failed_version": "9.1.72.1891", "error_message": "Build/sign/release failed after patch stage", "updated_at": "Sun Aug 16 19:58:10 UTC 2026"}
