@@ -4,7 +4,6 @@ import shutil
 
 # --- הגדרות ---
 # קוד ה-Smali לחומת האש (URL Filter) + הודעת ה-Toast
-# המשתנה {class_name} יוחלף דינמית בשם המחלקה של ה-WebViewClient שיימצא
 URL_FILTER_SMALI = """
 .method public shouldOverrideUrlLoading(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Z
     .registers 4
@@ -95,7 +94,6 @@ URL_FILTER_SMALI = """
 """
 
 def _free_up_main_dex(decompiled_dir: str):
-    """ מעביר ספריות מה-DEX הראשי ל-DEX משני כדי לעקוף את מגבלת ה-64K. """
     heavy_libraries = [os.path.join("kotlin"), os.path.join("okhttp3")]
     main_smali = os.path.join(decompiled_dir, "smali")
     dest_dex = os.path.join(decompiled_dir, "smali_classes2")
@@ -112,16 +110,13 @@ def _free_up_main_dex(decompiled_dir: str):
             print(f"[+] Optimization: Moved '{lib}' to smali_classes2 to free up 64K limit.")
 
 def patch(decompiled_dir: str) -> bool:
-    """ פונקציית הפאץ' הראשית של מטרוליסט """
     print("[*] Starting MetroList 'Kosher' patch...")
     
     _free_up_main_dex(decompiled_dir)
     
-    # 1. חסימת תמונות Thumbnails
     if not _patch_thumbnail(decompiled_dir):
         print("[-] Warning: Failed to patch Thumbnail.smali. Continuing...")
     
-    # 2. הזרקת חומת האש (URL Whitelist) ל-WebViewClient של ההתחברות
     webview_client_file = _find_webview_client_target(decompiled_dir)
     if webview_client_file:
         if not _inject_url_filter(webview_client_file):
@@ -152,17 +147,38 @@ def _patch_thumbnail(root_dir):
     return False
 
 def _find_webview_client_target(root_dir):
-    print("[*] Scanning for the WebViewClient file using 'VISITOR_DATA' keyword...")
+    anchor_string = 'javascript:Android.onRetrieveVisitorData'
+    known_relative_path = os.path.join("com", "metrolist", "music", "ui", "screens", "LoginScreenKt$LoginScreen$1$1$1.smali")
+    
+    print("[*] Trying fast-path: Checking known class for WebViewClient...")
+    
+    # שלב 1: חיפוש ישיר בנתיב הידוע מראש (Fast Path)
+    for smali_dir in os.listdir(root_dir):
+        if smali_dir.startswith("smali"):
+            exact_path = os.path.join(root_dir, smali_dir, known_relative_path)
+            if os.path.exists(exact_path):
+                try:
+                    with open(exact_path, 'r', encoding='utf-8') as f:
+                        if anchor_string in f.read():
+                            print(f"[+] Found known WebViewClient file quickly: {os.path.basename(exact_path)}")
+                            return exact_path
+                except Exception:
+                    pass
+
+    # שלב 2: סריקה מלאה במידה והנתיב לא קיים או שהעוגן חסר (Fallback)
+    print("[i] Known class not found or anchor missing. Falling back to full scan...")
     for root, dirs, files in os.walk(root_dir):
         for file in files:
             if file.endswith(".smali"):
                 path = os.path.join(root, file)
                 try:
                     with open(path, 'r', encoding='utf-8') as f:
-                        if 'VISITOR_DATA' in f.read():
+                        if anchor_string in f.read():
+                            print(f"[+] Found WebViewClient file via fallback scan: {file}")
                             return path
                 except (IOError, UnicodeDecodeError):
                     pass
+                    
     return None
 
 def _inject_url_filter(file_path):
@@ -170,7 +186,6 @@ def _inject_url_filter(file_path):
     try:
         with open(file_path, 'r', encoding='utf-8') as f: content = f.read()
         
-        # זיהוי דינמי של שם המחלקה
         class_match = re.search(r'\.class .*? (L[^;]+;)', content)
         if not class_match:
             print("[-] Could not dynamically identify Class Name.")
@@ -178,12 +193,10 @@ def _inject_url_filter(file_path):
         
         class_desc = class_match.group(1)
         
-        # מניעת הזרקה כפולה
         if "METROLIST_FILTER" in content:
             print("[i] URL filter already injected. Skipping.")
             return True
             
-        # שימוש ב-replace במקום ב-format כדי למנוע קריסת פייתון בגלל סוגריים מסולסלים של Smali
         smali_to_inject = "\n" + URL_FILTER_SMALI.replace("{class_name}", class_desc) + "\n"
         content += smali_to_inject
         
