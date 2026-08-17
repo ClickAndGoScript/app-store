@@ -48,10 +48,10 @@ class APKPureMobileSource:
             for s in strings:
                 if s.startswith(b'http'):
                     s_upper = s.upper()
-                    # פיצול והפרדה בין APK ל-XAPK
-                    if b'XAPK' in s_upper:
+                    # החזרנו את הלוכסן כדי שלא יתבלבל עם שם האתר pureapk
+                    if b'/XAPK' in s_upper:
                         xapk_urls.append(s.decode('utf-8'))
-                    elif b'APK' in s_upper:
+                    elif b'/APK' in s_upper:
                         apk_urls.append(s.decode('utf-8'))
             
             if not apk_urls and not xapk_urls:
