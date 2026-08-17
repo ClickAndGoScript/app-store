@@ -34,7 +34,7 @@
     ]
   },
   "source": {
-    "source": "custom_fallback",
+    "source": "apkpure_mobile",
     "name_play": "Spotify: Music and Podcasts"
   },
   "patching": {
