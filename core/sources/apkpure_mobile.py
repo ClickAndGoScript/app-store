@@ -26,7 +26,7 @@ class APKPureMobileSource:
     def get_latest_version(self, package_name: str):
         print(f"[*][APKPure Mobile] Fetching metadata for: {package_name}")
         params = {
-            'hl': 'en-US',
+            'hl': 'he-IL',
             'package_name': package_name
         }
         
@@ -42,19 +42,29 @@ class APKPureMobileSource:
             # חילוץ מחרוזות ארוכות מהתשובה הבינארית כדי למצוא כתובות URL
             strings = re.findall(rb'[ -~]{8,}', response.content)
             
-            valid_urls =[]
+            apk_urls = []
+            xapk_urls = []
+            
             for s in strings:
                 if s.startswith(b'http'):
                     s_upper = s.upper()
-                    # תופס גם APK וגם XAPK
-                    if b'/APK' in s_upper or b'/XAPK' in s_upper:
-                        valid_urls.append(s.decode('utf-8'))
+                    # פיצול והפרדה בין APK ל-XAPK
+                    if b'XAPK' in s_upper:
+                        xapk_urls.append(s.decode('utf-8'))
+                    elif b'APK' in s_upper:
+                        apk_urls.append(s.decode('utf-8'))
             
-            if not valid_urls:
+            if not apk_urls and not xapk_urls:
                 print("[-] [APKPure Mobile] No APK/XAPK URL found in API response.")
                 return None, None, None
                 
-            release_url = valid_urls[0]
+            # נותן עדיפות ל-APK המלא (שיש בו את כל השפות)
+            if apk_urls:
+                release_url = apk_urls[0]
+                print("[*] [APKPure Mobile] Selected APK format (Universal / All languages)")
+            else:
+                release_url = xapk_urls[0]
+                print("[*] [APKPure Mobile] Selected XAPK format (Fallback)")
             title = package_name
             version = None
             
