@@ -93,6 +93,14 @@ URL_FILTER_SMALI = """
 .end method
 """
 
+# שם המפתח להחלפה
+STRING_NAME_TO_REPLACE = "stands_with_palestine"
+
+# הטקסטים להחלפה
+HEBREW_TEXT = "🇮🇱 !!!עם ישראל חי 🇮🇱"
+ENGLISH_TEXT = "🇮🇱 Am Yisrael Chai!!! 🇮🇱"
+
+
 def _free_up_main_dex(decompiled_dir: str):
     heavy_libraries = [os.path.join("kotlin"), os.path.join("okhttp3")]
     main_smali = os.path.join(decompiled_dir, "smali")
@@ -109,6 +117,52 @@ def _free_up_main_dex(decompiled_dir: str):
             shutil.move(src_path, dst_path)
             print(f"[+] Optimization: Moved '{lib}' to smali_classes2 to free up 64K limit.")
 
+def _patch_strings(decompiled_dir: str) -> bool:
+    print(f"[*] Searching for strings.xml to replace '{STRING_NAME_TO_REPLACE}'...")
+    res_dir = os.path.join(decompiled_dir, "res")
+    
+    if not os.path.exists(res_dir):
+        print("[-] Error: 'res' directory not found.")
+        return False
+
+    pattern = re.compile(rf'(<string[^>]*name="{STRING_NAME_TO_REPLACE}"[^>]*>)(.*?)(</string>)')
+    modified_count = 0
+
+    for root, dirs, files in os.walk(res_dir):
+        folder_name = os.path.basename(root)
+        
+        if folder_name.startswith("values") and "strings.xml" in files:
+            filepath = os.path.join(root, "strings.xml")
+            
+            # בדיקה האם זו תיקיית עברית (iw באנדרואיד ישן או he בחדש)
+            if folder_name in ["values-iw", "values-he", "values-b+iw", "values-b+he"]:
+                replacement_text = HEBREW_TEXT
+            else:
+                # לכל שאר השפות ולברירת המחדל
+                replacement_text = ENGLISH_TEXT
+            
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                if pattern.search(content):
+                    new_content = pattern.sub(rf'\g<1>{replacement_text}\g<3>', content)
+                    
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        f.write(new_content)
+                    modified_count += 1
+                    print(f"  [+] Patched {folder_name}: {replacement_text}")
+                    
+            except Exception as e:
+                print(f"[-] Error processing string file {filepath}: {e}")
+
+    if modified_count > 0:
+        print(f"[+] Successfully replaced '{STRING_NAME_TO_REPLACE}' across {modified_count} language files!")
+        return True
+    else:
+        print(f"[-] Target string '{STRING_NAME_TO_REPLACE}' was not found in any strings.xml files.")
+        return False
+
 def patch(decompiled_dir: str) -> bool:
     print("[*] Starting MetroList 'Kosher' patch...")
     
@@ -116,6 +170,9 @@ def patch(decompiled_dir: str) -> bool:
     
     if not _patch_thumbnail(decompiled_dir):
         print("[-] Warning: Failed to patch Thumbnail.smali. Continuing...")
+        
+    # הפעלת פאצ' המחרוזות
+    _patch_strings(decompiled_dir)
     
     webview_client_file = _find_webview_client_target(decompiled_dir)
     if webview_client_file:
@@ -152,7 +209,6 @@ def _find_webview_client_target(root_dir):
     
     print("[*] Trying fast-path: Checking known class for WebViewClient...")
     
-    # שלב 1: חיפוש ישיר בנתיב הידוע מראש (Fast Path)
     for smali_dir in os.listdir(root_dir):
         if smali_dir.startswith("smali"):
             exact_path = os.path.join(root_dir, smali_dir, known_relative_path)
@@ -165,7 +221,6 @@ def _find_webview_client_target(root_dir):
                 except Exception:
                     pass
 
-    # שלב 2: סריקה מלאה במידה והנתיב לא קיים או שהעוגן חסר (Fallback)
     print("[i] Known class not found or anchor missing. Falling back to full scan...")
     for root, dirs, files in os.walk(root_dir):
         for file in files:
