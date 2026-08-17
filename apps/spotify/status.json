@@ -1,1 +1,1 @@
-{"success": false, "failed_version": "unknown", "error_message": "[Spotify: Music and Podcasts] No results found on apkmirror.", "updated_at": "Mon Aug 17 09:34:03 UTC 2026"}
+{"success": false, "failed_version": "unknown", "error_message": "[Spotify: Music and Podcasts] Source configuration error: Command '['/opt/hostedtoolcache/Python/3.11.15/x64/bin/python', '/home/runner/work/app-store/app-store/core/gplay_engine/gplay-downloader.py', 'auth', '-d', 'https://dispenser.auroraoss.com/']' returned non-zero exit status 1.", "updated_at": "Mon Aug 17 12:07:36 UTC 2026"}
