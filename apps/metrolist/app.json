@@ -28,7 +28,7 @@
   "patching": {
     "skip_mitm": true,
     "hotfixes": {
-      "13.3.0": ".1"
+      "13.6.3": ".1"
     }
   },
   "paths": {
