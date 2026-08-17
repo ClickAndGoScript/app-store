@@ -32,8 +32,7 @@ def apply_hotfix_if_needed(decompiled_dir: str, config: dict):
                 new_version_name = str(version_overrides[original_version_name])
             elif original_version_name in hotfixes:
                 suffix = hotfixes[original_version_name]
-                if not original_version_name.endswith(suffix):
-                    new_version_name = f"{original_version_name}{suffix}"
+                new_version_name = f"{original_version_name}{suffix}"
                     
             if new_version_name:
                 content = pattern_yml_name.sub(rf"\g<1>\g<2>{new_version_name}\g<2>", content, count=1)
@@ -69,8 +68,7 @@ def apply_hotfix_if_needed(decompiled_dir: str, config: dict):
                 new_version_name = str(version_overrides[original_version_name])
             elif original_version_name in hotfixes:
                 suffix = hotfixes[original_version_name]
-                if not original_version_name.endswith(suffix):
-                    new_version_name = f"{original_version_name}{suffix}"
+                new_version_name = f"{original_version_name}{suffix}"
                     
             if new_version_name:
                 content = pattern_manifest_name.sub(rf"\g<1>{new_version_name}\g<3>", content, count=1)
