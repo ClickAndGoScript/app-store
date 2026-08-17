@@ -41,7 +41,7 @@ class GPlayScraper:
 
         print(f"[*] [GooglePlay] Downloading & Merging {package_name} via GPlay Engine...")
         
-        # שימוש ב-sys.executable מבטיח שנשתמש בסביבת הפייתון הנוכחית (שבה מותקנים gpapi וכו')
+        # שימוש ב-sys.executable מבטיח שנשתמש בסביבת הפייתון הנוכחית
         cmd = [
             sys.executable, self.gplay_script, "download", package_name,
             "-m",  # מיזוג של ה-Splits ל-APK אחד
@@ -84,7 +84,7 @@ class GooglePlaySource:
             print("[*] [GooglePlay] GPlay Engine not found. Cloning at runtime...")
             repo_url = "https://github.com/alltechdev/gplay-apk-downloader.git"
             try:
-                # --depth 1 כדי להוריד מהר רק את הגרסה האחרונה בלי היסטוריית גיט
+                # --depth 1 כדי להוריד מהר בלי היסטוריית גיט
                 subprocess.run(["git", "clone", "--depth", "1", repo_url, self.engine_dir], check=True)
             except subprocess.CalledProcessError as e:
                 raise Exception(f"Failed to clone GPlay Engine: {e}")
@@ -103,9 +103,9 @@ class GooglePlaySource:
         auth_file = Path.home() / ".gplay-auth.json"
         if not auth_file.exists():
             print("[*] [GooglePlay] Auth file missing. Authenticating with Dispenser...")
-            dispenser_url = os.environ.get("DISPENSER_URL")
-            if not dispenser_url:
-                raise Exception("DISPENSER_URL env var is missing! Required for Google Play auth.")
+            
+            # משתמשים בדיספנסר הציבורי של אורורה כברירת מחדל
+            dispenser_url = os.environ.get("DISPENSER_URL", "https://dispenser.auroraoss.com/")
             
             cmd = [sys.executable, self.gplay_script, "auth", "-d", dispenser_url]
             subprocess.run(cmd, check=True)
