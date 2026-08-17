@@ -183,8 +183,8 @@ def _inject_url_filter(file_path):
             print("[i] URL filter already injected. Skipping.")
             return True
             
-        # יצירת הבלוק עם שם המחלקה הספציפי והזרקתו לסוף הקובץ
-        smali_to_inject = "\n" + URL_FILTER_SMALI.format(class_name=class_desc) + "\n"
+        # שימוש ב-replace במקום ב-format כדי למנוע קריסת פייתון בגלל סוגריים מסולסלים של Smali
+        smali_to_inject = "\n" + URL_FILTER_SMALI.replace("{class_name}", class_desc) + "\n"
         content += smali_to_inject
         
         with open(file_path, 'w', encoding='utf-8') as f:
