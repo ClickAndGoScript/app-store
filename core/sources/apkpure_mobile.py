@@ -26,7 +26,7 @@ class APKPureMobileSource:
     def get_latest_version(self, package_name: str):
         print(f"[*][APKPure Mobile] Fetching metadata for: {package_name}")
         params = {
-            'hl': 'he-IL',
+            'hl': 'he-IL',  # בקשה לשפה העברית כדי שאם יורד XAPK, הוא יכיל את קובץ השפה
             'package_name': package_name
         }
         
@@ -42,29 +42,46 @@ class APKPureMobileSource:
             # חילוץ מחרוזות ארוכות מהתשובה הבינארית כדי למצוא כתובות URL
             strings = re.findall(rb'[ -~]{8,}', response.content)
             
-            apk_urls = []
-            xapk_urls = []
-            
+            valid_urls = []
             for s in strings:
                 if s.startswith(b'http'):
                     s_upper = s.upper()
-                    # החזרנו את הלוכסן כדי שלא יתבלבל עם שם האתר pureapk
-                    if b'/XAPK' in s_upper:
-                        xapk_urls.append(s.decode('utf-8'))
-                    elif b'/APK' in s_upper:
-                        apk_urls.append(s.decode('utf-8'))
+                    # חיפוש עם לוכסן כדי לוודא שזה נתיב קובץ ולא סתם כתובת API
+                    if b'/APK' in s_upper or b'/XAPK' in s_upper:
+                        valid_urls.append(s.decode('utf-8'))
             
-            if not apk_urls and not xapk_urls:
+            if not valid_urls:
                 print("[-] [APKPure Mobile] No APK/XAPK URL found in API response.")
                 return None, None, None
                 
-            # נותן עדיפות ל-APK המלא (שיש בו את כל השפות)
-            if apk_urls:
-                release_url = apk_urls[0]
-                print("[*] [APKPure Mobile] Selected APK format (Universal / All languages)")
+            # ברירת המחדל - הקישור הראשון (הכי חדש שיש)
+            best_url = valid_urls[0]
+            latest_version = self._extract_version(best_url)
+            
+            # אם הראשון הוא XAPK, נחפש אם קיים APK זהה לאותה גרסה
+            if '/XAPK' in best_url.upper() and latest_version:
+                for url in valid_urls[1:]:
+                    url_version = self._extract_version(url)
+                    
+                    if not url_version:
+                        continue
+                        
+                    # אם הגענו לגרסה ישנה יותר, סימן שאין APK לגרסה החדשה - עוצרים!
+                    if url_version != latest_version:
+                        break
+                        
+                    # אם מצאנו APK מאותה גרסה בדיוק, ניקח אותו!
+                    if url_version == latest_version and '/APK' in url.upper() and '/XAPK' not in url.upper():
+                        best_url = url
+                        break
+            
+            release_url = best_url
+            
+            if '/XAPK' in release_url.upper():
+                print("[*] [APKPure Mobile] Selected XAPK format (Only option for latest version)")
             else:
-                release_url = xapk_urls[0]
-                print("[*] [APKPure Mobile] Selected XAPK format (Fallback)")
+                print("[*] [APKPure Mobile] Selected APK format (Latest version)")
+                
             title = package_name
             version = None
             
