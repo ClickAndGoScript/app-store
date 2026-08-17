@@ -14,13 +14,14 @@ from .uptodown import UptodownSource
 class SourceDefinition:
     factory: Callable[[dict], Any]
     lookup_field: str = "package_name"
-
+from .google_play import GooglePlaySource
 
 SOURCE_DEFINITIONS: dict[str, SourceDefinition] = {
     "whatsapp_official": SourceDefinition(factory=lambda _cfg: WhatsAppOfficialSource()),
     "apkmirror": SourceDefinition(factory=lambda _cfg: APKMirrorSource()),
     "aptoide": SourceDefinition(factory=lambda _cfg: AptoideSource()),
     "apkcombo": SourceDefinition(factory=lambda _cfg: APKComboSource()),
+    "google_play": SourceDefinition(factory=lambda _cfg: GooglePlaySource()),
     "apkpure": SourceDefinition(
         factory=lambda cfg: APKPureSource(
             file_type=cfg.get("apkpure_file_type", "XAPK"),
