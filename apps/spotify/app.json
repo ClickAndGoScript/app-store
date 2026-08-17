@@ -34,7 +34,7 @@
     ]
   },
   "source": {
-    "source": "google_play",
+    "source": "custom_fallback",
     "name_play": "Spotify: Music and Podcasts"
   },
   "patching": {
