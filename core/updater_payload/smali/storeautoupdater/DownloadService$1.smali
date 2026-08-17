@@ -308,7 +308,7 @@
     const/4 v7, 0x0
     
     # FLAG_IMMUTABLE (0x4000000)
-    const/high16 v8, 0x4000000
+    const/high16 v8, 0xc000000
 
     invoke-static {v6, v7, v5, v8}, Landroid/app/PendingIntent;->getActivity(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;
     move-result-object v5
